@@ -632,13 +632,16 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
         	else
         	{
 #if defined(_CBR_PRODUCT_REQ_) || defined(_ONESTACK_PRODUCT_REQ_)
-            if (syscfg_set(NULL, "XDNS_DNSSecEnable", setval) != 0)
+            if (is_devicemode_business())
             {
-                fprintf(stderr, "%s syscfg_set XDNS_DNSSecEnable failed %d !!!\n", __FUNCTION__, tmp_xdns_cache->XdnsEnable);
-            }
-            else
-            {
-                fprintf(stderr, "%s XDNS_DNSSecEnable value is set to %d in DB\n", __FUNCTION__, tmp_xdns_cache->XdnsEnable);
+                if (syscfg_set(NULL, "XDNS_DNSSecEnable", setval) != 0)
+                {
+                    fprintf(stderr, "%s syscfg_set XDNS_DNSSecEnable failed %d !!!\n", __FUNCTION__, tmp_xdns_cache->XdnsEnable);
+                }
+                else
+                {
+                    fprintf(stderr, "%s XDNS_DNSSecEnable value is set to %d in DB\n", __FUNCTION__, tmp_xdns_cache->XdnsEnable);
+                }
             }
 #endif // _CBR_PRODUCT_REQ_ || _ONESTACK_PRODUCT_REQ_
                 	if (syscfg_commit() != 0)

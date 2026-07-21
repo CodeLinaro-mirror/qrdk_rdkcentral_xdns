@@ -290,13 +290,16 @@ CcspXdnsConsoleTrace(("RDK_LOG_DEBUG, Xdns %s : ENTER \n", __FUNCTION__ ));
         else
         {
 #if defined(_CBR_PRODUCT_REQ_) || defined(_ONESTACK_PRODUCT_REQ_)
-            if (syscfg_set(NULL, "XDNS_DNSSecEnable", bval) != 0)
+            if (is_devicemode_business())
             {
-                CcspTraceError(("[XDNS] syscfg_set XDNS_DNSSecEnable failed!\n"));
-            }
-            else
-            {
-                fprintf(stderr, "%s [XDNS] XDNS_DNSSecEnable value is set to %s in DB\n", __FUNCTION__, bval);
+                if (syscfg_set(NULL, "XDNS_DNSSecEnable", bval) != 0)
+                {
+                    CcspTraceError(("[XDNS] syscfg_set XDNS_DNSSecEnable failed!\n"));
+                }
+                else
+                {
+                    fprintf(stderr, "%s [XDNS] XDNS_DNSSecEnable value is set to %s in DB\n", __FUNCTION__, bval);
+                }
             }
 #endif // _CBR_PRODUCT_REQ_ || _ONESTACK_PRODUCT_REQ_
                 if (syscfg_commit() != 0)
