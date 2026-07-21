@@ -290,7 +290,9 @@ CcspXdnsConsoleTrace(("RDK_LOG_DEBUG, Xdns %s : ENTER \n", __FUNCTION__ ));
         else
         {
 #if defined(_CBR_PRODUCT_REQ_) || defined(_ONESTACK_PRODUCT_REQ_)
+#if defined(_ONESTACK_PRODUCT_REQ_)
             if (is_devicemode_business())
+#endif // _ONESTACK_PRODUCT_REQ_
             {
                 if (syscfg_set(NULL, "XDNS_DNSSecEnable", bval) != 0)
                 {

@@ -632,7 +632,9 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
         	else
         	{
 #if defined(_CBR_PRODUCT_REQ_) || defined(_ONESTACK_PRODUCT_REQ_)
+#if defined(_ONESTACK_PRODUCT_REQ_)
             if (is_devicemode_business())
+#endif // _ONESTACK_PRODUCT_REQ_
             {
                 if (syscfg_set(NULL, "XDNS_DNSSecEnable", setval) != 0)
                 {
