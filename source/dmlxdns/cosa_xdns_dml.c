@@ -28,6 +28,7 @@
 #include <trower-base64/base64.h>
 #include "secure_wrapper.h"
 #include "ccsp_psm_helper.h"
+#include <sys/file.h>
 
 //core net lib
 #include <stdint.h>
@@ -124,6 +125,13 @@ BOOL isValidMacAddress
  * restart for a single MAC add/remove. Masked MAC entries (e.g.
  * "xx:xx:xx:xx:xx:xx/ff:ff:ff:ff:ff:00") can't go in a hash:mac ipset, so
  * fall back to a restart - needed anyway for the global-redirect fallback.
+ * Also falls back to a restart if an ipset update itself fails, so a
+ * failure can't silently leave a client's redirect state out of sync.
+ *
+ * Holds an flock() on DNSMASQ_SERVERS_CONF (the same file utopia's
+ * do_xdns_client_dns_route() locks while rebuilding these sets on a full
+ * restart - see firewall.c) so this update can't race with a concurrent
+ * rebuild re-adding a MAC this just removed, or vice versa.
  */
 static void xdns_sync_firewall_client(const char *mac, BOOL add)
 {
@@ -133,8 +141,26 @@ static void xdns_sync_firewall_client(const char *mac, BOOL add)
         return;
     }
 
-    v_secure_system("ipset -! %s %s %s", add ? "add" : "del", XDNS_IPSET_V4, mac);
-    v_secure_system("ipset -! %s %s %s", add ? "add" : "del", XDNS_IPSET_V6, mac);
+    int rc4, rc6;
+    FILE *lockfp = fopen(DNSMASQ_SERVERS_CONF, "r");
+    if (lockfp != NULL)
+    {
+        flock(fileno(lockfp), LOCK_EX);
+    }
+
+    rc4 = v_secure_system("ipset -! %s %s %s", add ? "add" : "del", XDNS_IPSET_V4, mac);
+    rc6 = v_secure_system("ipset -! %s %s %s", add ? "add" : "del", XDNS_IPSET_V6, mac);
+
+    if (lockfp != NULL)
+    {
+        flock(fileno(lockfp), LOCK_UN);
+        fclose(lockfp);
+    }
+
+    if (rc4 != 0 || rc6 != 0)
+    {
+        commonSyseventSet("firewall-restart", "");
+    }
 }
 
 /***********************************************************************
