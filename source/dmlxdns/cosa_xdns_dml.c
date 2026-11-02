@@ -120,18 +120,38 @@ BOOL isValidMacAddress
 #define XDNS_IPSET_V4 "xdns_clients_v4"
 #define XDNS_IPSET_V6 "xdns_clients_v6"
 
+// Stable lock file shared with firewall's do_xdns_client_dns_route()
+// (firewall.c); DNSMASQ_SERVERS_CONF can't be locked directly since it's
+// replaced via unlink+rename, which can pin a stale inode.
+#define XDNS_FW_SYNC_LOCKFILE "/tmp/xdns_fw_sync.lock"
+
+static FILE *xdns_fw_lock(void)
+{
+    FILE *lockfp = fopen(XDNS_FW_SYNC_LOCKFILE, "a+");
+    if (lockfp != NULL)
+    {
+        flock(fileno(lockfp), LOCK_EX);
+    }
+    return lockfp;
+}
+
+static void xdns_fw_unlock(FILE *lockfp)
+{
+    if (lockfp != NULL)
+    {
+        flock(fileno(lockfp), LOCK_UN);
+        fclose(lockfp);
+    }
+}
+
 /*
- * Updates the firewall's per-client ipsets directly instead of a full
- * restart for a single MAC add/remove. Masked MAC entries (e.g.
- * "xx:xx:xx:xx:xx:xx/ff:ff:ff:ff:ff:00") can't go in a hash:mac ipset, so
- * fall back to a restart - needed anyway for the global-redirect fallback.
- * Also falls back to a restart if an ipset update itself fails, so a
- * failure can't silently leave a client's redirect state out of sync.
+ * Updates the firewall's per-client ipsets for a single MAC add/remove,
+ * instead of a full restart. Falls back to a restart for masked MACs
+ * (can't go in a hash:mac ipset) or if the ipset update itself fails.
  *
- * Holds an flock() on DNSMASQ_SERVERS_CONF (the same file utopia's
- * do_xdns_client_dns_route() locks while rebuilding these sets on a full
- * restart - see firewall.c) so this update can't race with a concurrent
- * rebuild re-adding a MAC this just removed, or vice versa.
+ * Callers must hold xdns_fw_lock() across their conf update and this call
+ * (see DNSMappingTable_Commit()/DelEntry()) to avoid racing a concurrent
+ * firewall rebuild.
  */
 static void xdns_sync_firewall_client(const char *mac, BOOL add)
 {
@@ -141,21 +161,8 @@ static void xdns_sync_firewall_client(const char *mac, BOOL add)
         return;
     }
 
-    int rc4, rc6;
-    FILE *lockfp = fopen(DNSMASQ_SERVERS_CONF, "r");
-    if (lockfp != NULL)
-    {
-        flock(fileno(lockfp), LOCK_EX);
-    }
-
-    rc4 = v_secure_system("ipset -! %s %s %s", add ? "add" : "del", XDNS_IPSET_V4, mac);
-    rc6 = v_secure_system("ipset -! %s %s %s", add ? "add" : "del", XDNS_IPSET_V6, mac);
-
-    if (lockfp != NULL)
-    {
-        flock(fileno(lockfp), LOCK_UN);
-        fclose(lockfp);
-    }
+    int rc4 = v_secure_system("ipset -! %s %s %s", add ? "add" : "del", XDNS_IPSET_V4, mac);
+    int rc6 = v_secure_system("ipset -! %s %s %s", add ? "add" : "del", XDNS_IPSET_V6, mac);
 
     if (rc4 != 0 || rc6 != 0)
     {
@@ -1610,11 +1617,14 @@ DNSMappingTable_DelEntry
     PCOSA_CONTEXT_XDNS_LINK_OBJECT   pXdnsCxtLink   = (PCOSA_CONTEXT_XDNS_LINK_OBJECT)hInstance;
     PCOSA_DML_XDNS_MACDNS_MAPPING_ENTRY pDnsTableEntry      = (PCOSA_DML_XDNS_MACDNS_MAPPING_ENTRY)pXdnsCxtLink->hContext;
 	/* Remove entery from the database */
+    {
+        FILE *fwlock = xdns_fw_lock();
 
-    RemoveDnsmasqConfEntry(pDnsTableEntry->MacAddress);
+        RemoveDnsmasqConfEntry(pDnsTableEntry->MacAddress);
+        xdns_sync_firewall_client(pDnsTableEntry->MacAddress, FALSE);
 
-    /* Drop this client from the firewall's redirect set */
-    xdns_sync_firewall_client(pDnsTableEntry->MacAddress, FALSE);
+        xdns_fw_unlock(fwlock);
+    }
 
     if ( returnStatus == ANSC_STATUS_SUCCESS )
 	{
@@ -1993,14 +2003,19 @@ DNSMappingTable_Commit
 #else
     snprintf(dnsoverrideEntry[0], 256, "dnsoverride %s %s %s\n", pDnsTableEntry->MacAddress, pDnsTableEntry->DnsIPv4, pDnsTableEntry->Tag);
 #endif
-    ReplaceDnsmasqConfEntry(pDnsTableEntry->MacAddress, dnsoverrideEntry,1);
-
-    /* DnsIPv4/DnsIPv6/Tag-only edits don't change which clients get
-     * redirected - dnsmasq picks up the new override value on its own, so
-     * only a MAC add/change needs the firewall's client set updated */
-    if (pDnsTableEntry->MacAddressChanged)
     {
-        xdns_sync_firewall_client(pDnsTableEntry->MacAddress, TRUE);
+        FILE *fwlock = xdns_fw_lock();
+
+        ReplaceDnsmasqConfEntry(pDnsTableEntry->MacAddress, dnsoverrideEntry,1);
+
+        /* Only a MAC add/change affects which clients get redirected - DNS/
+         * tag-only edits apply via dnsmasq's existing override. */
+        if (pDnsTableEntry->MacAddressChanged)
+        {
+            xdns_sync_firewall_client(pDnsTableEntry->MacAddress, TRUE);
+        }
+
+        xdns_fw_unlock(fwlock);
     }
 
     pDnsTableEntry->MacAddressChanged = FALSE;
