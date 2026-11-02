@@ -29,6 +29,8 @@
 #include "secure_wrapper.h"
 #include "ccsp_psm_helper.h"
 #include <sys/file.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 //core net lib
 #include <stdint.h>
@@ -125,22 +127,28 @@ BOOL isValidMacAddress
 // replaced via unlink+rename, which can pin a stale inode.
 #define XDNS_FW_SYNC_LOCKFILE "/tmp/xdns_fw_sync.lock"
 
-static FILE *xdns_fw_lock(void)
+static int xdns_fw_lock(void)
 {
-    FILE *lockfp = fopen(XDNS_FW_SYNC_LOCKFILE, "a+");
-    if (lockfp != NULL)
+    // Open without O_CREAT first: the file may be owned by firewall (root),
+    // and fs.protected_regular rejects O_CREAT on another user's file in /tmp.
+    int fd = open(XDNS_FW_SYNC_LOCKFILE, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
     {
-        flock(fileno(lockfp), LOCK_EX);
+        fd = open(XDNS_FW_SYNC_LOCKFILE, O_RDONLY | O_CREAT | O_CLOEXEC, 0644);
     }
-    return lockfp;
+    if (fd >= 0)
+    {
+        flock(fd, LOCK_EX);
+    }
+    return fd;
 }
 
-static void xdns_fw_unlock(FILE *lockfp)
+static void xdns_fw_unlock(int fd)
 {
-    if (lockfp != NULL)
+    if (fd >= 0)
     {
-        flock(fileno(lockfp), LOCK_UN);
-        fclose(lockfp);
+        flock(fd, LOCK_UN);
+        close(fd);
     }
 }
 
@@ -155,16 +163,28 @@ static void xdns_fw_unlock(FILE *lockfp)
  */
 static void xdns_sync_firewall_client(const char *mac, BOOL add)
 {
+    const char *sets[] = { XDNS_IPSET_V4, XDNS_IPSET_V6 };
+    BOOL failed = FALSE;
+    int i;
+
     if (mac == NULL || strchr(mac, '/') != NULL)
     {
         commonSyseventSet("firewall-restart", "");
         return;
     }
 
-    int rc4 = v_secure_system("ipset -! %s %s %s", add ? "add" : "del", XDNS_IPSET_V4, mac);
-    int rc6 = v_secure_system("ipset -! %s %s %s", add ? "add" : "del", XDNS_IPSET_V6, mac);
+    for (i = 0; i < 2; i++)
+    {
+        // Create first: firewall skips a family with no LAN address (e.g. no
+        // LAN IPv6), and a missing set shouldn't force a restart every time.
+        if (v_secure_system("ipset -! create %s hash:mac", sets[i]) != 0 ||
+            v_secure_system("ipset -! %s %s %s", add ? "add" : "del", sets[i], mac) != 0)
+        {
+            failed = TRUE;
+        }
+    }
 
-    if (rc4 != 0 || rc6 != 0)
+    if (failed)
     {
         commonSyseventSet("firewall-restart", "");
     }
@@ -1618,10 +1638,16 @@ DNSMappingTable_DelEntry
     PCOSA_DML_XDNS_MACDNS_MAPPING_ENTRY pDnsTableEntry      = (PCOSA_DML_XDNS_MACDNS_MAPPING_ENTRY)pXdnsCxtLink->hContext;
 	/* Remove entery from the database */
     {
-        FILE *fwlock = xdns_fw_lock();
+        int fwlock = xdns_fw_lock();
 
-        RemoveDnsmasqConfEntry(pDnsTableEntry->MacAddress);
-        xdns_sync_firewall_client(pDnsTableEntry->MacAddress, FALSE);
+        if (RemoveDnsmasqConfEntry(pDnsTableEntry->MacAddress) == 0)
+        {
+            xdns_sync_firewall_client(pDnsTableEntry->MacAddress, FALSE);
+        }
+        else
+        {
+            returnStatus = ANSC_STATUS_FAILURE;
+        }
 
         xdns_fw_unlock(fwlock);
     }
@@ -2004,18 +2030,23 @@ DNSMappingTable_Commit
     snprintf(dnsoverrideEntry[0], 256, "dnsoverride %s %s %s\n", pDnsTableEntry->MacAddress, pDnsTableEntry->DnsIPv4, pDnsTableEntry->Tag);
 #endif
     {
-        FILE *fwlock = xdns_fw_lock();
-
-        ReplaceDnsmasqConfEntry(pDnsTableEntry->MacAddress, dnsoverrideEntry,1);
+        int fwlock = xdns_fw_lock();
+        int conf_rc = ReplaceDnsmasqConfEntry(pDnsTableEntry->MacAddress, dnsoverrideEntry,1);
 
         /* Only a MAC add/change affects which clients get redirected - DNS/
          * tag-only edits apply via dnsmasq's existing override. */
-        if (pDnsTableEntry->MacAddressChanged)
+        if (conf_rc == 0 && pDnsTableEntry->MacAddressChanged)
         {
             xdns_sync_firewall_client(pDnsTableEntry->MacAddress, TRUE);
         }
 
         xdns_fw_unlock(fwlock);
+
+        if (conf_rc != 0)
+        {
+            CcspTraceError(("%s: failed to update %s\n", __FUNCTION__, DNSMASQ_SERVERS_CONF));
+            return ANSC_STATUS_FAILURE;
+        }
     }
 
     pDnsTableEntry->MacAddressChanged = FALSE;

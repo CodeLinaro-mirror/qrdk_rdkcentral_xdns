@@ -745,21 +745,23 @@ void* MonitorResolvConfForChanges(void *arg)
 }
 
 
-void ReplaceDnsmasqConfEntry(char* macaddress, char (*overrideEntry)[MAX_BUF_SIZE], int count)
+// Returns 0 once the conf reflects the new entry, -1 if it couldn't be updated.
+int ReplaceDnsmasqConfEntry(char* macaddress, char (*overrideEntry)[MAX_BUF_SIZE], int count)
 {
     char dnsmasqConfEntry[256] = {0};
+    int ret = 0;
 	//pthread_mutex_lock(&dnsmasqMutex);
 
     if(!macaddress || !strlen(macaddress) || !overrideEntry)
     {
         CcspTraceError(("%s macaddress & defaultEntry NULL check \n",__FUNCTION__));
-        return;
+        return -1;
     }
 
     if (count < 0 || count >= MAX_BUF_SIZE)
     {
         CcspTraceError(("%s count NULL check \n",__FUNCTION__));
-        return;
+        return -1;
     }
 
     unlink(DNSMASQ_SERVERS_BAK);
@@ -779,7 +781,7 @@ void ReplaceDnsmasqConfEntry(char* macaddress, char (*overrideEntry)[MAX_BUF_SIZ
         // the entry which is being replced.
         AppendDnsmasqConfEntry(overrideEntry,count);
         RefreshResolvConfEntry();
-        return;
+        return 0;
     }
 
     fp2 = fopen(DNSMASQ_SERVERS_BAK ,"a");
@@ -787,7 +789,7 @@ void ReplaceDnsmasqConfEntry(char* macaddress, char (*overrideEntry)[MAX_BUF_SIZ
     {
         fprintf(stderr,"\nReplaceDnsmasqConfEntry() - Error reading file %s\n", DNSMASQ_SERVERS_BAK);
 	fclose(fp1);
-        return;
+        return -1;
     }
 
     //Step 2: Get text from original file//
@@ -814,13 +816,15 @@ void ReplaceDnsmasqConfEntry(char* macaddress, char (*overrideEntry)[MAX_BUF_SIZ
     fclose(fp2);
     /*Coverity Fix CID:68436 CHECKED_RETURN */
     if(rename(DNSMASQ_SERVERS_BAK, DNSMASQ_SERVERS_CONF) != 0 )
+    {
         fprintf(stderr,"Error in renaming  file\n");
-        
+        ret = -1;
+    }
 
 	// update to resolv.conf file
     RefreshResolvConfEntry();
 
-	return;
+	return ret;
 }
 
 void AppendDnsmasqConfEntry(char (*string1)[MAX_BUF_SIZE], int count)
@@ -845,13 +849,15 @@ void AppendDnsmasqConfEntry(char (*string1)[MAX_BUF_SIZE], int count)
 	return;
 }
 
-void RemoveDnsmasqConfEntry(char* macaddress)
+// Returns 0 once the conf no longer has the MAC's entry, -1 if it couldn't be updated.
+int RemoveDnsmasqConfEntry(char* macaddress)
 {
     char dnsmasqConfEntry[256] = {0};
+    int ret = 0;
     if (macaddress == NULL)
     {
         CcspTraceError(("%s macaddress NULL check\n", __FUNCTION__));
-        return;
+        return -1;
     }
 
     //Step 1: Open text files and check that they open//
@@ -860,7 +866,7 @@ void RemoveDnsmasqConfEntry(char* macaddress)
     fp1 = fopen(DNSMASQ_SERVERS_CONF, "r");
     if(fp1 == NULL) {
         CcspTraceInfo(("%s - File Not Created %s\n", __FUNCTION__, DNSMASQ_SERVERS_CONF));
-        return;
+        return 0;
     }
 
     fp2 = fopen(DNSMASQ_SERVERS_BAK , "r");
@@ -873,7 +879,7 @@ void RemoveDnsmasqConfEntry(char* macaddress)
     if(fp2 == NULL) {
         CcspTraceError(("%s - Error reading file %s\n", __FUNCTION__, DNSMASQ_SERVERS_BAK));
         fclose(fp1);
-        return;
+        return -1;
     }
 
     //Step 2: Get text from original file//
@@ -888,11 +894,14 @@ void RemoveDnsmasqConfEntry(char* macaddress)
     unlink(DNSMASQ_SERVERS_CONF);
     fclose(fp2);
     if(rename(DNSMASQ_SERVERS_BAK, DNSMASQ_SERVERS_CONF) != 0 )
+    {
         fprintf(stderr,"Error in renaming  file\n");
+        ret = -1;
+    }
     // update to resolv.conf file
     RefreshResolvConfEntry();
 
-    return;
+    return ret;
 }
 
 // Create Default dnsoverride entry (00:00:00:00:00:00) using nameserver entries from resolv.conf file
