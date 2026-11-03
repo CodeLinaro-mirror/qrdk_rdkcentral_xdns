@@ -136,18 +136,20 @@ static int xdns_fw_lock(void)
     {
         fd = open(XDNS_FW_SYNC_LOCKFILE, O_RDONLY | O_CREAT | O_CLOEXEC, 0644);
     }
-    if (fd >= 0)
+    if (fd >= 0 && flock(fd, LOCK_EX) != 0)
     {
-        flock(fd, LOCK_EX);
+        CcspTraceError(("%s: failed to lock %s\n", __FUNCTION__, XDNS_FW_SYNC_LOCKFILE));
+        close(fd);
+        fd = -1;
     }
     return fd;
 }
 
 static void xdns_fw_unlock(int fd)
 {
+    // Closing the fd also releases the flock().
     if (fd >= 0)
     {
-        flock(fd, LOCK_UN);
         close(fd);
     }
 }
