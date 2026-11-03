@@ -80,9 +80,45 @@ extern ANSC_HANDLE bus_handle;
 #include "ccsp_xdnsLog_wrapper.h"
 #include "safec_lib_common.h"
 #include "secure_wrapper.h"
+#include <sys/file.h>
+#include <fcntl.h>
+#include <unistd.h>
 //static pthread_mutex_t dnsmasqMutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define BUF_LEN (10 * (sizeof(struct inotify_event) + NAME_MAX + 1))
+
+// Lock shared with firewall's do_xdns_client_dns_route() (firewall.c). The
+// conf file itself can't be locked since it's replaced via unlink+rename,
+// which can pin a stale inode.
+#define XDNS_FW_SYNC_LOCKFILE "/tmp/xdns_fw_sync.lock"
+
+// Returns the locked fd, or -1 if the lock couldn't be taken.
+int xdns_fw_lock(void)
+{
+    // Open without O_CREAT first: the file may be owned by firewall (root),
+    // and fs.protected_regular rejects O_CREAT on another user's file in /tmp.
+    int fd = open(XDNS_FW_SYNC_LOCKFILE, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+    {
+        fd = open(XDNS_FW_SYNC_LOCKFILE, O_RDONLY | O_CREAT | O_CLOEXEC, 0644);
+    }
+    if (fd >= 0 && flock(fd, LOCK_EX) != 0)
+    {
+        CcspTraceError(("%s: failed to lock %s\n", __FUNCTION__, XDNS_FW_SYNC_LOCKFILE));
+        close(fd);
+        fd = -1;
+    }
+    return fd;
+}
+
+void xdns_fw_unlock(int fd)
+{
+    // Closing the fd also releases the flock().
+    if (fd >= 0)
+    {
+        close(fd);
+    }
+}
 
 #ifndef UNIT_TEST_DOCKER_SUPPORT
     #define STATIC static

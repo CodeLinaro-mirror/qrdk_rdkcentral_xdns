@@ -156,6 +156,8 @@ int ReplaceDnsmasqConfEntry(char* macaddress, char (*overrideEntry)[MAX_BUF_SIZE
 void ResetDnsmasqConfFile();
 void AppendDnsmasqConfEntry(char (*string1)[MAX_BUF_SIZE], int count);
 int RemoveDnsmasqConfEntry(char* macaddress);
+int xdns_fw_lock(void);
+void xdns_fw_unlock(int fd);
 void RefreshResolvConfEntry();
 int SetXdnsConfig();
 int UnsetXdnsConfig();

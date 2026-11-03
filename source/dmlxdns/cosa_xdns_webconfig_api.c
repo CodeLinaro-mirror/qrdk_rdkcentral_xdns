@@ -571,15 +571,18 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 	char* def_mac= "00:00:00:00:00:00";
 	char buf[DATA_BLOCK_SIZE]={0};
 	FILE *fp1 =NULL;
+	int fwlock = -1;
 	int i;
 	errno_t rc = -1;
 
 	fprintf(stderr, "%s Entered !!!\n",__FUNCTION__);
 
+	fwlock = xdns_fw_lock();
 	fp1 = fopen(DNSMASQ_SERVERS_CONF, "w");
 	if(fp1 == NULL)
 	{
 		fprintf(stderr, "%s DNSMASQ_SERVERS_CONF file open error!!!\n",__FUNCTION__);
+		xdns_fw_unlock(fwlock);
 		return FILE_OPEN_ERROR;
 	}
 
@@ -601,6 +604,7 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
         }
 
 	fclose(fp1);
+	xdns_fw_unlock(fwlock);
 
 	syscfg_get( NULL, "X_RDKCENTRAL-COM_XDNS", buf, sizeof(buf));
 	int var=atoi(buf);

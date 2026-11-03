@@ -28,9 +28,6 @@
 #include <trower-base64/base64.h>
 #include "secure_wrapper.h"
 #include "ccsp_psm_helper.h"
-#include <sys/file.h>
-#include <fcntl.h>
-#include <unistd.h>
 
 //core net lib
 #include <stdint.h>
@@ -121,38 +118,6 @@ BOOL isValidMacAddress
 /* Keep in sync with XDNS_IPSET_V4/XDNS_IPSET_V6 in utopia's firewall.c */
 #define XDNS_IPSET_V4 "xdns_clients_v4"
 #define XDNS_IPSET_V6 "xdns_clients_v6"
-
-// Stable lock file shared with firewall's do_xdns_client_dns_route()
-// (firewall.c); DNSMASQ_SERVERS_CONF can't be locked directly since it's
-// replaced via unlink+rename, which can pin a stale inode.
-#define XDNS_FW_SYNC_LOCKFILE "/tmp/xdns_fw_sync.lock"
-
-static int xdns_fw_lock(void)
-{
-    // Open without O_CREAT first: the file may be owned by firewall (root),
-    // and fs.protected_regular rejects O_CREAT on another user's file in /tmp.
-    int fd = open(XDNS_FW_SYNC_LOCKFILE, O_RDONLY | O_CLOEXEC);
-    if (fd < 0)
-    {
-        fd = open(XDNS_FW_SYNC_LOCKFILE, O_RDONLY | O_CREAT | O_CLOEXEC, 0644);
-    }
-    if (fd >= 0 && flock(fd, LOCK_EX) != 0)
-    {
-        CcspTraceError(("%s: failed to lock %s\n", __FUNCTION__, XDNS_FW_SYNC_LOCKFILE));
-        close(fd);
-        fd = -1;
-    }
-    return fd;
-}
-
-static void xdns_fw_unlock(int fd)
-{
-    // Closing the fd also releases the flock().
-    if (fd >= 0)
-    {
-        close(fd);
-    }
-}
 
 /*
  * Updates the firewall's per-client ipsets for a single MAC add/remove,
