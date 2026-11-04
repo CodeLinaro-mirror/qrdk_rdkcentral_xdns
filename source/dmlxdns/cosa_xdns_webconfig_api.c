@@ -581,9 +581,9 @@ static int xdns_policy_append(char *out, size_t size, const char *line)
 	return 0;
 }
 
-/* Collects the conf lines that decide a global redirect in the firewall: the
- * default entry and any masked MAC. Read with open() so it can be done before
- * the conf is truncated. Returns -1 if the conf can't be read or is too big. */
+/* Collects the conf lines that decide a global redirect (default entry, masked
+ * MACs). Uses open() so it can run before the conf is truncated. Returns -1 if
+ * the conf can't be read or is too big. */
 static int xdns_conf_policy(char *out, size_t size)
 {
 	char line[DATA_BLOCK_SIZE * 2];
@@ -622,9 +622,8 @@ static int xdns_conf_policy(char *out, size_t size)
 	return ret;
 }
 
-/* Rebuilds the per-client ipset from the cache through a staging set and an
- * atomic swap, so tagged clients never see an empty set. Masked MACs and the
- * default entry are covered by the firewall's global redirect instead. */
+/* Rebuilds the client ipset from the cache via a staging set and an atomic
+ * swap. Masked MACs and the default entry are left to the global redirect. */
 static int xdns_sync_client_set(xdns_cache *cache)
 {
 	char stage[64];
@@ -720,9 +719,8 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
     	if( tmp_xdns_cache->XdnsEnable == var)
     	{
 		fprintf(stderr, "%s blob and DB XDNS ENABLE falg are same %d !!!\n",__FUNCTION__,tmp_xdns_cache->XdnsEnable);
-		// Enable state isn't changing. If XDNS is on, only a changed default
-		// entry or masked MAC can flip the global redirect and needs a
-		// firewall rebuild; otherwise just sync the per-client ipsets.
+		// Enable state unchanged: only a changed default entry or masked MAC
+		// can flip the global redirect and needs a rebuild; else sync the set.
 		if (var)
 		{
 			int needRestart = (policyChanged || 0 != strcmp(oldPolicy, newPolicy));

@@ -116,13 +116,9 @@ BOOL isValidMacAddress
 }
 
 /*
- * Updates the firewall's per-client ipsets for a single MAC add/remove,
- * instead of a full restart. Falls back to a restart for masked MACs
- * (can't go in a hash:mac ipset) or if the ipset update itself fails.
- *
- * Callers must hold xdns_fw_lock() across their conf update and this call
- * (see DNSMappingTable_Commit()/DelEntry()) to avoid racing a concurrent
- * firewall rebuild.
+ * Updates the firewall's client ipset for one MAC instead of restarting it;
+ * restarts for masked MACs or on any ipset failure. Callers hold xdns_fw_lock()
+ * across their conf update and this call.
  */
 static void xdns_sync_firewall_client(const char *mac, BOOL add)
 {

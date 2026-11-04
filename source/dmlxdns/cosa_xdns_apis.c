@@ -87,9 +87,8 @@ extern ANSC_HANDLE bus_handle;
 
 #define BUF_LEN (10 * (sizeof(struct inotify_event) + NAME_MAX + 1))
 
-// Lock shared with firewall's do_xdns_client_dns_route() (firewall.c). The
-// conf file itself can't be locked since it's replaced via unlink+rename,
-// which can pin a stale inode.
+// Lock shared with the firewall rebuild. The conf can't be locked itself: it's
+// replaced via unlink+rename, which can pin a stale inode.
 #define XDNS_FW_SYNC_LOCKFILE "/tmp/xdns_fw_sync.lock"
 
 // Returns the locked fd, or -1 if the lock couldn't be taken.
