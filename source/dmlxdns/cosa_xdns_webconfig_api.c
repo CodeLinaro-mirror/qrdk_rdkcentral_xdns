@@ -18,11 +18,18 @@
 */
 
 #include <syscfg/syscfg.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <strings.h>
 #include "cosa_xdns_webconfig_api.h"
 #include "cosa_xdns_apis.h"
 #include "plugin_main_apis.h"
 #include "webconfig_framework.h"
 #include  "safec_lib_common.h"
+#include "secure_wrapper.h"
+
+#define XDNS_DEFAULT_MAC "00:00:00:00:00:00"
+#define XDNS_POLICY_SIZE 4096
 
 xdns_cache XDNS_Data_Cache;
 xdns_cache XDNS_tmp_bck;
@@ -562,14 +569,106 @@ void webConfigFrameworkInit()
 
 }
 
+/* Appends 'line' to 'out'; returns -1 if it doesn't fit. */
+static int xdns_policy_append(char *out, size_t size, const char *line)
+{
+	size_t len = strlen(out);
+
+	if (snprintf(out + len, size - len, "%s", line) >= (int)(size - len))
+	{
+		return -1;
+	}
+	return 0;
+}
+
+/* Collects the conf lines that decide a global redirect in the firewall: the
+ * default entry and any masked MAC. Read with open() so it can be done before
+ * the conf is truncated. Returns -1 if the conf can't be read or is too big. */
+static int xdns_conf_policy(char *out, size_t size)
+{
+	char line[DATA_BLOCK_SIZE * 2];
+	char copy[DATA_BLOCK_SIZE * 2];
+	int fd = open(DNSMASQ_SERVERS_CONF, O_RDONLY);
+	FILE *fp = (fd >= 0) ? fdopen(fd, "r") : NULL;
+	int ret = 0;
+
+	if (fp == NULL)
+	{
+		if (fd >= 0)
+		{
+			close(fd);
+		}
+		return -1;
+	}
+
+	while (fgets(line, sizeof(line), fp) != NULL)
+	{
+		char *saveptr = NULL;
+		char *key = NULL;
+		char *mac = NULL;
+
+		snprintf(copy, sizeof(copy), "%s", line);
+		key = strtok_r(copy, " \t\n\r", &saveptr);
+		mac = strtok_r(NULL, " \t\n\r", &saveptr);
+		if (key != NULL && mac != NULL && 0 == strcmp(key, "dnsoverride") &&
+		    (0 == strcasecmp(mac, XDNS_DEFAULT_MAC) || strchr(mac, '/') != NULL) &&
+		    0 != xdns_policy_append(out, size, line))
+		{
+			ret = -1;
+		}
+	}
+
+	fclose(fp);
+	return ret;
+}
+
+/* Rebuilds one per-client ipset from the cache through a staging set and an
+ * atomic swap, so tagged clients never see an empty set. Masked MACs and the
+ * default entry are covered by the firewall's global redirect instead. */
+static int xdns_sync_client_set(xdns_cache *cache, const char *live)
+{
+	char stage[64];
+	int rc = 0;
+	int i;
+
+	snprintf(stage, sizeof(stage), "%s_new", live);
+	v_secure_system("ipset -! destroy %s", stage);
+	rc = v_secure_system("ipset -! create %s hash:mac", stage);
+
+	for (i = 0; rc == 0 && i < cache->Tablecount && i < XDNS_CACHE_SIZE; i++)
+	{
+		const char *mac = cache->XDNSTableList[i].MacAddress;
+
+		if (mac[0] != '\0' && strchr(mac, '/') == NULL && 0 != strcasecmp(mac, XDNS_DEFAULT_MAC))
+		{
+			rc = v_secure_system("ipset -! add %s %s", stage, mac);
+		}
+	}
+
+	if (rc == 0)
+	{
+		rc = v_secure_system("ipset -! create %s hash:mac", live);
+	}
+	if (rc == 0)
+	{
+		rc = v_secure_system("ipset -! swap %s %s", stage, live);
+	}
+	v_secure_system("ipset -! destroy %s", stage);
+
+	return rc;
+}
+
 /* API to apply XDNS blob requests to DB */
 int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 {
 	PCOSA_DATAMODEL_XDNS            pMyObject           = (PCOSA_DATAMODEL_XDNS)g_pCosaBEManager->hXdns;
 
 	char Entry[DATA_BLOCK_SIZE]={0};
-	char* def_mac= "00:00:00:00:00:00";
+	char* def_mac= XDNS_DEFAULT_MAC;
 	char buf[DATA_BLOCK_SIZE]={0};
+	char oldPolicy[XDNS_POLICY_SIZE]={0};
+	char newPolicy[XDNS_POLICY_SIZE]={0};
+	int policyChanged = 0;
 	FILE *fp1 =NULL;
 	int fwlock = -1;
 	int i;
@@ -578,6 +677,7 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 	fprintf(stderr, "%s Entered !!!\n",__FUNCTION__);
 
 	fwlock = xdns_fw_lock();
+	policyChanged = (0 != xdns_conf_policy(oldPolicy, sizeof(oldPolicy)));
 	fp1 = fopen(DNSMASQ_SERVERS_CONF, "w");
 	if(fp1 == NULL)
 	{
@@ -591,6 +691,10 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 	    ERR_CHK(rc);
 	}
 	fprintf(fp1, "%s", Entry);
+	if (0 != xdns_policy_append(newPolicy, sizeof(newPolicy), Entry))
+	{
+		policyChanged = 1;
+	}
 
         for(i=0;i<(tmp_xdns_cache->Tablecount);i++)
         {
@@ -601,24 +705,47 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 		     ERR_CHK(rc);
 		}
 	fprintf(fp1, "%s", Entry);
+		if ((strchr(tmp_xdns_cache->XDNSTableList[i].MacAddress, '/') != NULL ||
+		     0 == strcasecmp(tmp_xdns_cache->XDNSTableList[i].MacAddress, def_mac)) &&
+		    0 != xdns_policy_append(newPolicy, sizeof(newPolicy), Entry))
+		{
+			policyChanged = 1;
+		}
         }
 
 	fclose(fp1);
-	xdns_fw_unlock(fwlock);
 
 	syscfg_get( NULL, "X_RDKCENTRAL-COM_XDNS", buf, sizeof(buf));
 	int var=atoi(buf);
     	if( tmp_xdns_cache->XdnsEnable == var)
     	{
 		fprintf(stderr, "%s blob and DB XDNS ENABLE falg are same %d !!!\n",__FUNCTION__,tmp_xdns_cache->XdnsEnable);
-		// Enable state isn't changing, so the restart below (on an actual
-		// enable/disable change) won't run - do it here to pick up the
-		// rewritten conf file instead.
-		commonSyseventSet("firewall-restart", "");
+		// Enable state isn't changing. If XDNS is on, only a changed default
+		// entry or masked MAC can flip the global redirect and needs a
+		// firewall rebuild; otherwise just sync the per-client ipsets.
+		if (var)
+		{
+			int needRestart = (policyChanged || 0 != strcmp(oldPolicy, newPolicy));
+
+			if (!needRestart)
+			{
+				int rc4 = xdns_sync_client_set(tmp_xdns_cache, XDNS_IPSET_V4);
+				int rc6 = xdns_sync_client_set(tmp_xdns_cache, XDNS_IPSET_V6);
+
+				needRestart = (rc4 != 0 || rc6 != 0);
+			}
+			if (needRestart)
+			{
+				commonSyseventSet("firewall-restart", "");
+			}
+		}
+		xdns_fw_unlock(fwlock);
 	}
 	else
 	{
 		char setval[5]={0};
+
+		xdns_fw_unlock(fwlock);
 
         	if(tmp_xdns_cache->XdnsEnable)
         	{

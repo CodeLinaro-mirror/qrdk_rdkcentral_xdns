@@ -115,10 +115,6 @@ BOOL isValidMacAddress
     return TRUE;
 }
 
-/* Keep in sync with XDNS_IPSET_V4/XDNS_IPSET_V6 in utopia's firewall.c */
-#define XDNS_IPSET_V4 "xdns_clients_v4"
-#define XDNS_IPSET_V6 "xdns_clients_v6"
-
 /*
  * Updates the firewall's per-client ipsets for a single MAC add/remove,
  * instead of a full restart. Falls back to a restart for masked MACs
