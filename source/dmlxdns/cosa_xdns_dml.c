@@ -126,28 +126,10 @@ BOOL isValidMacAddress
  */
 static void xdns_sync_firewall_client(const char *mac, BOOL add)
 {
-    const char *sets[] = { XDNS_IPSET_V4, XDNS_IPSET_V6 };
-    BOOL failed = FALSE;
-    int i;
-
-    if (mac == NULL || strchr(mac, '/') != NULL)
-    {
-        commonSyseventSet("firewall-restart", "");
-        return;
-    }
-
-    for (i = 0; i < 2; i++)
-    {
-        // Create first: firewall skips a family with no LAN address (e.g. no
-        // LAN IPv6), and a missing set shouldn't force a restart every time.
-        if (v_secure_system("ipset -! create %s hash:mac", sets[i]) != 0 ||
-            v_secure_system("ipset -! %s %s %s", add ? "add" : "del", sets[i], mac) != 0)
-        {
-            failed = TRUE;
-        }
-    }
-
-    if (failed)
+    // Create first so a set the firewall hasn't built yet doesn't force a restart.
+    if (mac == NULL || strchr(mac, '/') != NULL ||
+        v_secure_system("ipset -! create %s hash:mac", XDNS_IPSET) != 0 ||
+        v_secure_system("ipset -! %s %s %s", add ? "add" : "del", XDNS_IPSET, mac) != 0)
     {
         commonSyseventSet("firewall-restart", "");
     }

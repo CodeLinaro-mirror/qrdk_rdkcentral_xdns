@@ -25,9 +25,8 @@
 #define DNSMASQ_SERVERS_CONF "/nvram/dnsmasq_servers.conf"
 #define DNSMASQ_SERVERS_BAK "/nvram/dnsmasq_servers.bak"
 
-/* Keep in sync with XDNS_IPSET_V4/XDNS_IPSET_V6 in utopia's firewall.c */
-#define XDNS_IPSET_V4 "xdns_clients_v4"
-#define XDNS_IPSET_V6 "xdns_clients_v6"
+/* Keep in sync with XDNS_IPSET in utopia's firewall.c */
+#define XDNS_IPSET "xdns_clients"
 
 #define MAX_BUF_SIZE 256
 #define MAX_XDNS_SERV 2

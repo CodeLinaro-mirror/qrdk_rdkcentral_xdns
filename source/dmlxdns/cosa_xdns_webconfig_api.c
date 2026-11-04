@@ -622,16 +622,16 @@ static int xdns_conf_policy(char *out, size_t size)
 	return ret;
 }
 
-/* Rebuilds one per-client ipset from the cache through a staging set and an
+/* Rebuilds the per-client ipset from the cache through a staging set and an
  * atomic swap, so tagged clients never see an empty set. Masked MACs and the
  * default entry are covered by the firewall's global redirect instead. */
-static int xdns_sync_client_set(xdns_cache *cache, const char *live)
+static int xdns_sync_client_set(xdns_cache *cache)
 {
 	char stage[64];
 	int rc = 0;
 	int i;
 
-	snprintf(stage, sizeof(stage), "%s_new", live);
+	snprintf(stage, sizeof(stage), "%s_new", XDNS_IPSET);
 	v_secure_system("ipset -! destroy %s", stage);
 	rc = v_secure_system("ipset -! create %s hash:mac", stage);
 
@@ -647,11 +647,11 @@ static int xdns_sync_client_set(xdns_cache *cache, const char *live)
 
 	if (rc == 0)
 	{
-		rc = v_secure_system("ipset -! create %s hash:mac", live);
+		rc = v_secure_system("ipset -! create %s hash:mac", XDNS_IPSET);
 	}
 	if (rc == 0)
 	{
-		rc = v_secure_system("ipset -! swap %s %s", stage, live);
+		rc = v_secure_system("ipset -! swap %s %s", stage, XDNS_IPSET);
 	}
 	v_secure_system("ipset -! destroy %s", stage);
 
@@ -729,10 +729,9 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 
 			if (!needRestart)
 			{
-				int rc4 = xdns_sync_client_set(tmp_xdns_cache, XDNS_IPSET_V4);
-				int rc6 = xdns_sync_client_set(tmp_xdns_cache, XDNS_IPSET_V6);
+				int rc = xdns_sync_client_set(tmp_xdns_cache);
 
-				needRestart = (rc4 != 0 || rc6 != 0);
+				needRestart = (rc != 0);
 			}
 			if (needRestart)
 			{
