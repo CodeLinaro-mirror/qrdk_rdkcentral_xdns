@@ -712,7 +712,14 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 		}
         }
 
-	fclose(fp1);
+	// A failed write leaves a partial conf: report it so the framework rolls back.
+	int writeFailed = (ferror(fp1) != 0);
+	if (fclose(fp1) != 0 || writeFailed)
+	{
+		fprintf(stderr, "%s failed to write %s\n", __FUNCTION__, DNSMASQ_SERVERS_CONF);
+		xdns_fw_unlock(fwlock);
+		return FILE_OPEN_ERROR;
+	}
 
 	syscfg_get( NULL, "X_RDKCENTRAL-COM_XDNS", buf, sizeof(buf));
 	int var=atoi(buf);
