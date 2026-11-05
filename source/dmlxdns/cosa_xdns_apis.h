@@ -28,6 +28,7 @@
 /* The firewall creates the set and matches it; xdns owns its members */
 #define XDNS_IPSET "xdns_clients"
 #define XDNS_DEFAULT_MAC "00:00:00:00:00:00"
+#define XDNS_DEFAULT_TAG "empty"
 
 #define MAX_BUF_SIZE 256
 #define MAX_XDNS_SERV 2

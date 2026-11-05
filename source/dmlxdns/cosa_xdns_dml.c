@@ -115,16 +115,22 @@ BOOL isValidMacAddress
     return TRUE;
 }
 
-/* A masked MAC can't be in the set: it needs the firewall's global redirect,
- * so request a rebuild. Otherwise just refresh the set. */
+/* Refreshes the ipset/syscfg flag for a changed client, and restarts the
+ * firewall only if the global-vs-per-client decision flipped (e.g. a masked
+ * MAC was added/removed). */
 static void xdns_sync_firewall_client(const char *mac)
 {
-    if (mac == NULL || strchr(mac, '/') != NULL)
+    char oldFlag[2] = {0};
+    char newFlag[2] = {0};
+
+    (void)mac;
+    syscfg_get(NULL, "XDNS_GlobalRedirect", oldFlag, sizeof(oldFlag));
+    xdns_sync_ipset();
+    syscfg_get(NULL, "XDNS_GlobalRedirect", newFlag, sizeof(newFlag));
+    if (0 != strcmp(oldFlag, newFlag))
     {
         commonSyseventSet("firewall-restart", "");
-        return;
     }
-    xdns_sync_ipset();
 }
 
 /***********************************************************************
@@ -1287,9 +1293,19 @@ XDNS_Commit
         CreateDnsmasqServerConf(pMyObject);
     }
 
-    // Restart firewall to apply the updated default DNS redirect rule(s);
-    // otherwise the global-default commit path never refreshes iptables.
-    commonSyseventSet("firewall-restart", "");
+    // Refresh the ipset/syscfg flag, and restart the firewall only if the
+    // global-vs-per-client redirect decision actually flipped.
+    {
+        char oldFlag[2] = {0};
+        char newFlag[2] = {0};
+        syscfg_get(NULL, "XDNS_GlobalRedirect", oldFlag, sizeof(oldFlag));
+        xdns_sync_ipset();
+        syscfg_get(NULL, "XDNS_GlobalRedirect", newFlag, sizeof(newFlag));
+        if (0 != strcmp(oldFlag, newFlag))
+        {
+            commonSyseventSet("firewall-restart", "");
+        }
+    }
 
     pMyObject->DefaultDeviceDnsIPv4Changed = FALSE;
     pMyObject->DefaultDeviceDnsIPv6Changed = FALSE;

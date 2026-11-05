@@ -27,8 +27,6 @@
 #include "webconfig_framework.h"
 #include "safec_lib_common.h"
 
-#define XDNS_POLICY_SIZE 4096
-
 xdns_cache XDNS_Data_Cache;
 xdns_cache XDNS_tmp_bck;
 
@@ -567,59 +565,6 @@ void webConfigFrameworkInit()
 
 }
 
-/* Appends 'line' to 'out'; returns -1 if it doesn't fit. */
-static int xdns_policy_append(char *out, size_t size, const char *line)
-{
-	size_t len = strlen(out);
-
-	if (snprintf(out + len, size - len, "%s", line) >= (int)(size - len))
-	{
-		return -1;
-	}
-	return 0;
-}
-
-/* Collects the conf lines that decide a global redirect (default entry, masked
- * MACs). Uses open() so it can run before the conf is truncated. Returns -1 if
- * the conf can't be read or is too big. */
-static int xdns_conf_policy(char *out, size_t size)
-{
-	char line[DATA_BLOCK_SIZE * 2];
-	char copy[DATA_BLOCK_SIZE * 2];
-	int fd = open(DNSMASQ_SERVERS_CONF, O_RDONLY);
-	FILE *fp = (fd >= 0) ? fdopen(fd, "r") : NULL;
-	int ret = 0;
-
-	if (fp == NULL)
-	{
-		if (fd >= 0)
-		{
-			close(fd);
-		}
-		return -1;
-	}
-
-	while (fgets(line, sizeof(line), fp) != NULL)
-	{
-		char *saveptr = NULL;
-		char *key = NULL;
-		char *mac = NULL;
-
-		snprintf(copy, sizeof(copy), "%s", line);
-		key = strtok_r(copy, " \t\n\r", &saveptr);
-		mac = strtok_r(NULL, " \t\n\r", &saveptr);
-		if (key != NULL && mac != NULL && 0 == strcmp(key, "dnsoverride") &&
-		    (0 == strcasecmp(mac, XDNS_DEFAULT_MAC) || strchr(mac, '/') != NULL) &&
-		    0 != xdns_policy_append(out, size, line))
-		{
-			ret = -1;
-		}
-	}
-
-	fclose(fp);
-	return ret;
-}
-
 /* API to apply XDNS blob requests to DB */
 int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 {
@@ -628,16 +573,15 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 	char Entry[DATA_BLOCK_SIZE]={0};
 	char* def_mac= XDNS_DEFAULT_MAC;
 	char buf[DATA_BLOCK_SIZE]={0};
-	char oldPolicy[XDNS_POLICY_SIZE]={0};
-	char newPolicy[XDNS_POLICY_SIZE]={0};
-	int policyChanged = 0;
+	char oldFlag[2]={0};
+	char newFlag[2]={0};
 	FILE *fp1 =NULL;
 	int i;
 	errno_t rc = -1;
 
 	fprintf(stderr, "%s Entered !!!\n",__FUNCTION__);
 
-	policyChanged = (0 != xdns_conf_policy(oldPolicy, sizeof(oldPolicy)));
+	syscfg_get(NULL, "XDNS_GlobalRedirect", oldFlag, sizeof(oldFlag));
 	fp1 = fopen(DNSMASQ_SERVERS_CONF, "w");
 	if(fp1 == NULL)
 	{
@@ -650,10 +594,6 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 	    ERR_CHK(rc);
 	}
 	fprintf(fp1, "%s", Entry);
-	if (0 != xdns_policy_append(newPolicy, sizeof(newPolicy), Entry))
-	{
-		policyChanged = 1;
-	}
 
         for(i=0;i<(tmp_xdns_cache->Tablecount);i++)
         {
@@ -664,12 +604,6 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 		     ERR_CHK(rc);
 		}
 	fprintf(fp1, "%s", Entry);
-		if ((strchr(tmp_xdns_cache->XDNSTableList[i].MacAddress, '/') != NULL ||
-		     0 == strcasecmp(tmp_xdns_cache->XDNSTableList[i].MacAddress, def_mac)) &&
-		    0 != xdns_policy_append(newPolicy, sizeof(newPolicy), Entry))
-		{
-			policyChanged = 1;
-		}
         }
 
 	// A failed write leaves a partial conf: report it so the framework rolls back.
@@ -681,15 +615,16 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 	}
 
 	xdns_sync_ipset();
+	syscfg_get(NULL, "XDNS_GlobalRedirect", newFlag, sizeof(newFlag));
 
 	syscfg_get( NULL, "X_RDKCENTRAL-COM_XDNS", buf, sizeof(buf));
 	int var=atoi(buf);
     	if( tmp_xdns_cache->XdnsEnable == var)
     	{
 		fprintf(stderr, "%s blob and DB XDNS ENABLE falg are same %d !!!\n",__FUNCTION__,tmp_xdns_cache->XdnsEnable);
-		// Enable state unchanged: only a changed default entry or masked MAC
-		// can flip the global redirect and needs a firewall rebuild.
-		if (var && (policyChanged || 0 != strcmp(oldPolicy, newPolicy)))
+		// Enable state unchanged: restart only if the global-redirect
+		// decision flipped (default entry or masked MAC changed).
+		if (var && 0 != strcmp(oldFlag, newFlag))
 		{
 			commonSyseventSet("firewall-restart", "");
 		}
