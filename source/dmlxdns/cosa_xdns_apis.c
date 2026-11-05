@@ -133,7 +133,8 @@ int xdns_sync_ipset(void)
     if (fp == NULL)
     {
         CcspTraceError(("%s: cannot read %s\n", __FUNCTION__, DNSMASQ_SERVERS_CONF));
-        syscfg_set(NULL, "XDNS_GlobalRedirect", "1");
+        if (syscfg_set(NULL, "XDNS_GlobalRedirect", "1") != 0)
+            CcspTraceError(("%s: syscfg_set XDNS_GlobalRedirect failed\n", __FUNCTION__));
         return -1;
     }
 
@@ -184,7 +185,11 @@ int xdns_sync_ipset(void)
     }
     v_secure_system("ipset -! destroy %s", stage);
 
-    syscfg_set(NULL, "XDNS_GlobalRedirect", (rc != 0 || global_redirect) ? "1" : "0");
+    if (syscfg_set(NULL, "XDNS_GlobalRedirect", (rc != 0 || global_redirect) ? "1" : "0") != 0)
+    {
+        CcspTraceError(("%s: syscfg_set XDNS_GlobalRedirect failed\n", __FUNCTION__));
+        rc = -1;
+    }
 
     if (rc != 0)
     {
