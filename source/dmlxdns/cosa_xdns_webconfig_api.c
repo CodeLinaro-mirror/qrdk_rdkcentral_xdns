@@ -675,7 +675,7 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
                 	else
                 	{
 				fprintf(stderr, "%s X_RDKCENTRAL-COM_XDNS value is set to %d in DB\n",__FUNCTION__,tmp_xdns_cache->XdnsEnable);
-                        	//Restart firewall to apply XDNS setting
+                        	// Restart firewall to apply XDNS enable/disable.
                         	commonSyseventSet("firewall-restart", "");
                 	}
         	}
