@@ -89,17 +89,26 @@ extern ANSC_HANDLE bus_handle;
 
 #define BUF_LEN (10 * (sizeof(struct inotify_event) + NAME_MAX + 1))
 
-/* Returns 1 if 'dns' is not one of resolv.conf's own nameservers, i.e. it is
- * a real XDNS override rather than the device's normal DNS. */
+/* Returns 1 if 'dns' is not the LAN dnsmasq server or one of resolv.conf's own
+ * nameservers, i.e. it is a real XDNS override rather than normal operation. */
 static int xdns_default_is_override(const char *dns)
 {
     char buf[256];
     char ns[256];
+    char lan_ip[64] = {0};
     FILE *fp;
 
     if (dns == NULL || dns[0] == '\0')
         return 0;
 
+    /* If default DNS equals the LAN IP (dnsmasq), it's normal, not an override */
+    if (syscfg_get(NULL, "lan_ipaddr", lan_ip, sizeof(lan_ip)) == 0 &&
+        lan_ip[0] != '\0' && 0 == strcasecmp(dns, lan_ip))
+    {
+        return 0;
+    }
+
+    /* Check resolv.conf for WAN nameservers */
     fp = fopen(RESOLV_CONF, "r");
     if (fp == NULL)
         return 1;  /* Can't verify: assume override to be safe */
