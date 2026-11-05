@@ -1587,6 +1587,10 @@ CosaXDNSInitialize
         return ANSC_STATUS_FAILURE;
     }
 #endif //WAN_FAILOVER_SUPPORTED
+#ifndef UNIT_TEST_DOCKER_SUPPORT
+    // The set is lost on reboot and only xdns fills it.
+    xdns_sync_ipset();
+#endif
     ret = rbusEvent_Subscribe(handle, "Device.X_RDK_WanManager.CurrentActiveDNS", eventReceiveHandler, NULL, 0);
     if(ret != RBUS_ERROR_SUCCESS)
     {
