@@ -91,15 +91,51 @@ extern ANSC_HANDLE bus_handle;
 
 static pthread_mutex_t g_xdnsIpsetMutex = PTHREAD_MUTEX_INITIALIZER;
 
+/* Check if global redirect is needed: default is real XDNS, masked MAC, or file unreadable */
+static int xdns_global_redirect_needed(void)
+{
+    char line[256];
+    FILE *fp = fopen(DNSMASQ_SERVERS_CONF, "r");
+    
+    if (fp == NULL)
+        return 1;  /* Unreadable conf -> global redirect */
+    
+    while (fgets(line, sizeof(line), fp) != NULL)
+    {
+        char *saveptr = NULL;
+        char *key = strtok_r(line, " \t\r\n", &saveptr);
+        char *mac = strtok_r(NULL, " \t\r\n", &saveptr);
+
+        if (key != NULL && mac != NULL && 0 == strcmp(key, "dnsoverride"))
+        {
+            if (0 == strcasecmp(mac, XDNS_DEFAULT_MAC))
+            {
+                /* Default entry present -> global redirect */
+                fclose(fp);
+                return 1;
+            }
+            if (strchr(mac, '/') != NULL)
+            {
+                /* Masked MAC present -> global redirect */
+                fclose(fp);
+                return 1;
+            }
+        }
+    }
+    fclose(fp);
+    return 0;  /* All plain MACs -> per-client redirect */
+}
+
 /* Rebuilds the client ipset from the conf via a staging set and an atomic
  * swap. Masked MACs and the default entry stay out of the set: the firewall
- * redirects all clients for them. Returns 0 on success. */
+ * redirects all clients for them. Updates syscfg global-redirect flag. Returns 0 on success. */
 int xdns_sync_ipset(void)
 {
     char stage[64];
     char line[256];
     FILE *fp = NULL;
     int rc;
+    int global_redirect;
 
     pthread_mutex_lock(&g_xdnsIpsetMutex);
     fp = fopen(DNSMASQ_SERVERS_CONF, "r");
@@ -137,6 +173,13 @@ int xdns_sync_ipset(void)
         rc = v_secure_system("ipset -! swap %s %s", stage, XDNS_IPSET);
     }
     v_secure_system("ipset -! destroy %s", stage);
+    
+    /* Write global-redirect flag to syscfg for firewall to use */
+    global_redirect = xdns_global_redirect_needed();
+    char val[2];
+    snprintf(val, sizeof(val), "%d", global_redirect);
+    syscfg_set(NULL, "XDNS_GlobalRedirect", val);
+    
     pthread_mutex_unlock(&g_xdnsIpsetMutex);
 
     if (rc != 0)
