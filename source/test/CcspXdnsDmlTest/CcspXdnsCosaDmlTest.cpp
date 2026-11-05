@@ -4129,10 +4129,9 @@ TEST_F(CcspXdnsCosaDmlTestFixture, DNSMappingTable_Commit_CoreNet)
         .Times(1)
         .WillOnce(DoAll(testing::SetArrayArgument<2>(buf, buf + sizeof(buf)), Return(0)));
 
-    // v_secure_system() is mocked to fail for every call here, including the
-    // ipset add, so the MAC add/change falls back to a firewall restart.
+    // A plain MAC only refreshes the ipset (even when that fails); no restart.
     EXPECT_CALL(*g_syseventMock, sysevent_set(_, _, StrEq("firewall-restart"), _, _))
-        .Times(1);
+        .Times(0);
 
     ULONG result = DNSMappingTable_Commit((ANSC_HANDLE)pXdnsCxtLink);
 
@@ -4182,10 +4181,9 @@ TEST_F(CcspXdnsCosaDmlTestFixture, DNSMappingTable_Commit_CoreNet_Failure)
         .Times(1)
         .WillOnce(DoAll(testing::SetArrayArgument<2>(buf, buf + sizeof(buf)), Return(0)));
 
-    // v_secure_system() is mocked to fail for every call here, including the
-    // ipset add, so the MAC add/change falls back to a firewall restart.
+    // A plain MAC only refreshes the ipset (even when that fails); no restart.
     EXPECT_CALL(*g_syseventMock, sysevent_set(_, _, StrEq("firewall-restart"), _, _))
-        .Times(1);
+        .Times(0);
 
     ULONG result = DNSMappingTable_Commit((ANSC_HANDLE)pXdnsCxtLink);
 

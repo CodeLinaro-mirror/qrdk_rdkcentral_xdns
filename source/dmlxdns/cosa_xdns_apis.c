@@ -83,40 +83,67 @@ extern ANSC_HANDLE bus_handle;
 #include <sys/file.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <strings.h>
 //static pthread_mutex_t dnsmasqMutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define BUF_LEN (10 * (sizeof(struct inotify_event) + NAME_MAX + 1))
 
-// Lock shared with the firewall rebuild. The conf can't be locked itself: it's
-// replaced via unlink+rename, which can pin a stale inode.
-#define XDNS_FW_SYNC_LOCKFILE "/tmp/xdns_fw_sync.lock"
+static pthread_mutex_t g_xdnsIpsetMutex = PTHREAD_MUTEX_INITIALIZER;
 
-// Returns the locked fd, or -1 if the lock couldn't be taken.
-int xdns_fw_lock(void)
+/* Rebuilds the client ipset from the conf via a staging set and an atomic
+ * swap. Masked MACs and the default entry stay out of the set: the firewall
+ * redirects all clients for them. Returns 0 on success. */
+int xdns_sync_ipset(void)
 {
-    // Open without O_CREAT first: the file may be owned by firewall (root),
-    // and fs.protected_regular rejects O_CREAT on another user's file in /tmp.
-    int fd = open(XDNS_FW_SYNC_LOCKFILE, O_RDONLY | O_CLOEXEC);
-    if (fd < 0)
-    {
-        fd = open(XDNS_FW_SYNC_LOCKFILE, O_RDONLY | O_CREAT | O_CLOEXEC, 0644);
-    }
-    if (fd >= 0 && flock(fd, LOCK_EX) != 0)
-    {
-        CcspTraceError(("%s: failed to lock %s\n", __FUNCTION__, XDNS_FW_SYNC_LOCKFILE));
-        close(fd);
-        fd = -1;
-    }
-    return fd;
-}
+    char stage[64];
+    char line[256];
+    FILE *fp = NULL;
+    int rc;
 
-void xdns_fw_unlock(int fd)
-{
-    // Closing the fd also releases the flock().
-    if (fd >= 0)
+    pthread_mutex_lock(&g_xdnsIpsetMutex);
+    fp = fopen(DNSMASQ_SERVERS_CONF, "r");
+    if (fp == NULL)
     {
-        close(fd);
+        CcspTraceError(("%s: cannot read %s\n", __FUNCTION__, DNSMASQ_SERVERS_CONF));
+        pthread_mutex_unlock(&g_xdnsIpsetMutex);
+        return -1;
     }
+
+    snprintf(stage, sizeof(stage), "%s_new", XDNS_IPSET);
+    v_secure_system("ipset -! destroy %s", stage);
+    rc = v_secure_system("ipset -! create %s hash:mac", stage);
+
+    while (rc == 0 && fgets(line, sizeof(line), fp) != NULL)
+    {
+        char *saveptr = NULL;
+        char *key = strtok_r(line, " \t\r\n", &saveptr);
+        char *mac = strtok_r(NULL, " \t\r\n", &saveptr);
+
+        if (key != NULL && mac != NULL && 0 == strcmp(key, "dnsoverride") &&
+            strchr(mac, '/') == NULL && 0 != strcasecmp(mac, XDNS_DEFAULT_MAC))
+        {
+            rc = v_secure_system("ipset -! add %s %s", stage, mac);
+        }
+    }
+    fclose(fp);
+
+    if (rc == 0)
+    {
+        rc = v_secure_system("ipset -! create %s hash:mac", XDNS_IPSET);
+    }
+    if (rc == 0)
+    {
+        rc = v_secure_system("ipset -! swap %s %s", stage, XDNS_IPSET);
+    }
+    v_secure_system("ipset -! destroy %s", stage);
+    pthread_mutex_unlock(&g_xdnsIpsetMutex);
+
+    if (rc != 0)
+    {
+        CcspTraceError(("%s: failed to update ipset %s\n", __FUNCTION__, XDNS_IPSET));
+    }
+    return rc;
 }
 
 #ifndef UNIT_TEST_DOCKER_SUPPORT

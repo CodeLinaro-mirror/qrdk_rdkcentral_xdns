@@ -53,6 +53,8 @@ static cap_user appcaps;
 
 #define XDNS_BOOTUP_INIT_FILE "/tmp/xdns_bootup_initialized"
 
+extern int xdns_sync_ipset(void);
+
 PDSLH_CPE_CONTROLLER_OBJECT     pDslhCpeController      = NULL;
 PCOMPONENT_COMMON_DM            g_pComponent_Common_Dm  = NULL;
 PCCSP_FC_CONTEXT                pXdnsFcContext           = (PCCSP_FC_CONTEXT            )NULL;
@@ -438,6 +440,9 @@ int main(int argc, char* argv[])
 //        fprintf(stderr, "%s: fail to write PID file\n", argv[0]);
 
     cmd_dispatch('e');
+
+    // The set is lost on reboot and only xdns fills it.
+    xdns_sync_ipset();
 
     check_component_crash(XDNS_BOOTUP_INIT_FILE);
     CcspTraceInfo(("XDNS:------------------touch /tmp/Xdns_bootup_initialized----------------\n"));

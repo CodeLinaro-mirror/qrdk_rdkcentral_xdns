@@ -25,10 +25,8 @@
 #include "cosa_xdns_apis.h"
 #include "plugin_main_apis.h"
 #include "webconfig_framework.h"
-#include  "safec_lib_common.h"
-#include "secure_wrapper.h"
+#include "safec_lib_common.h"
 
-#define XDNS_DEFAULT_MAC "00:00:00:00:00:00"
 #define XDNS_POLICY_SIZE 4096
 
 xdns_cache XDNS_Data_Cache;
@@ -622,41 +620,6 @@ static int xdns_conf_policy(char *out, size_t size)
 	return ret;
 }
 
-/* Rebuilds the client ipset from the cache via a staging set and an atomic
- * swap. Masked MACs and the default entry are left to the global redirect. */
-static int xdns_sync_client_set(xdns_cache *cache)
-{
-	char stage[64];
-	int rc = 0;
-	int i;
-
-	snprintf(stage, sizeof(stage), "%s_new", XDNS_IPSET);
-	v_secure_system("ipset -! destroy %s", stage);
-	rc = v_secure_system("ipset -! create %s hash:mac", stage);
-
-	for (i = 0; rc == 0 && i < cache->Tablecount && i < XDNS_CACHE_SIZE; i++)
-	{
-		const char *mac = cache->XDNSTableList[i].MacAddress;
-
-		if (mac[0] != '\0' && strchr(mac, '/') == NULL && 0 != strcasecmp(mac, XDNS_DEFAULT_MAC))
-		{
-			rc = v_secure_system("ipset -! add %s %s", stage, mac);
-		}
-	}
-
-	if (rc == 0)
-	{
-		rc = v_secure_system("ipset -! create %s hash:mac", XDNS_IPSET);
-	}
-	if (rc == 0)
-	{
-		rc = v_secure_system("ipset -! swap %s %s", stage, XDNS_IPSET);
-	}
-	v_secure_system("ipset -! destroy %s", stage);
-
-	return rc;
-}
-
 /* API to apply XDNS blob requests to DB */
 int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 {
@@ -669,19 +632,16 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 	char newPolicy[XDNS_POLICY_SIZE]={0};
 	int policyChanged = 0;
 	FILE *fp1 =NULL;
-	int fwlock = -1;
 	int i;
 	errno_t rc = -1;
 
 	fprintf(stderr, "%s Entered !!!\n",__FUNCTION__);
 
-	fwlock = xdns_fw_lock();
 	policyChanged = (0 != xdns_conf_policy(oldPolicy, sizeof(oldPolicy)));
 	fp1 = fopen(DNSMASQ_SERVERS_CONF, "w");
 	if(fp1 == NULL)
 	{
 		fprintf(stderr, "%s DNSMASQ_SERVERS_CONF file open error!!!\n",__FUNCTION__);
-		xdns_fw_unlock(fwlock);
 		return FILE_OPEN_ERROR;
 	}
 
@@ -717,9 +677,10 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 	if (fclose(fp1) != 0 || writeFailed)
 	{
 		fprintf(stderr, "%s failed to write %s\n", __FUNCTION__, DNSMASQ_SERVERS_CONF);
-		xdns_fw_unlock(fwlock);
 		return FILE_OPEN_ERROR;
 	}
+
+	xdns_sync_ipset();
 
 	syscfg_get( NULL, "X_RDKCENTRAL-COM_XDNS", buf, sizeof(buf));
 	int var=atoi(buf);
@@ -727,29 +688,15 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
     	{
 		fprintf(stderr, "%s blob and DB XDNS ENABLE falg are same %d !!!\n",__FUNCTION__,tmp_xdns_cache->XdnsEnable);
 		// Enable state unchanged: only a changed default entry or masked MAC
-		// can flip the global redirect and needs a rebuild; else sync the set.
-		if (var)
+		// can flip the global redirect and needs a firewall rebuild.
+		if (var && (policyChanged || 0 != strcmp(oldPolicy, newPolicy)))
 		{
-			int needRestart = (policyChanged || 0 != strcmp(oldPolicy, newPolicy));
-
-			if (!needRestart)
-			{
-				int rc = xdns_sync_client_set(tmp_xdns_cache);
-
-				needRestart = (rc != 0);
-			}
-			if (needRestart)
-			{
-				commonSyseventSet("firewall-restart", "");
-			}
+			commonSyseventSet("firewall-restart", "");
 		}
-		xdns_fw_unlock(fwlock);
 	}
 	else
 	{
 		char setval[5]={0};
-
-		xdns_fw_unlock(fwlock);
 
         	if(tmp_xdns_cache->XdnsEnable)
         	{

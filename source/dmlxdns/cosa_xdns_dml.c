@@ -115,20 +115,16 @@ BOOL isValidMacAddress
     return TRUE;
 }
 
-/*
- * Updates the firewall's client ipset for one MAC instead of restarting it;
- * restarts for masked MACs or on any ipset failure. Callers hold xdns_fw_lock()
- * across their conf update and this call.
- */
-static void xdns_sync_firewall_client(const char *mac, BOOL add)
+/* A masked MAC can't be in the set: it needs the firewall's global redirect,
+ * so request a rebuild. Otherwise just refresh the set. */
+static void xdns_sync_firewall_client(const char *mac)
 {
-    // Create first so a set the firewall hasn't built yet doesn't force a restart.
-    if (mac == NULL || strchr(mac, '/') != NULL ||
-        v_secure_system("ipset -! create %s hash:mac", XDNS_IPSET) != 0 ||
-        v_secure_system("ipset -! %s %s %s", add ? "add" : "del", XDNS_IPSET, mac) != 0)
+    if (mac == NULL || strchr(mac, '/') != NULL)
     {
         commonSyseventSet("firewall-restart", "");
+        return;
     }
+    xdns_sync_ipset();
 }
 
 /***********************************************************************
@@ -1578,19 +1574,13 @@ DNSMappingTable_DelEntry
     PCOSA_CONTEXT_XDNS_LINK_OBJECT   pXdnsCxtLink   = (PCOSA_CONTEXT_XDNS_LINK_OBJECT)hInstance;
     PCOSA_DML_XDNS_MACDNS_MAPPING_ENTRY pDnsTableEntry      = (PCOSA_DML_XDNS_MACDNS_MAPPING_ENTRY)pXdnsCxtLink->hContext;
 	/* Remove entery from the database */
+    if (RemoveDnsmasqConfEntry(pDnsTableEntry->MacAddress) == 0)
     {
-        int fwlock = xdns_fw_lock();
-
-        if (RemoveDnsmasqConfEntry(pDnsTableEntry->MacAddress) == 0)
-        {
-            xdns_sync_firewall_client(pDnsTableEntry->MacAddress, FALSE);
-        }
-        else
-        {
-            returnStatus = ANSC_STATUS_FAILURE;
-        }
-
-        xdns_fw_unlock(fwlock);
+        xdns_sync_firewall_client(pDnsTableEntry->MacAddress);
+    }
+    else
+    {
+        returnStatus = ANSC_STATUS_FAILURE;
     }
 
     if ( returnStatus == ANSC_STATUS_SUCCESS )
@@ -1970,24 +1960,17 @@ DNSMappingTable_Commit
 #else
     snprintf(dnsoverrideEntry[0], 256, "dnsoverride %s %s %s\n", pDnsTableEntry->MacAddress, pDnsTableEntry->DnsIPv4, pDnsTableEntry->Tag);
 #endif
+    if (ReplaceDnsmasqConfEntry(pDnsTableEntry->MacAddress, dnsoverrideEntry,1) != 0)
     {
-        int fwlock = xdns_fw_lock();
-        int conf_rc = ReplaceDnsmasqConfEntry(pDnsTableEntry->MacAddress, dnsoverrideEntry,1);
+        CcspTraceError(("%s: failed to update %s\n", __FUNCTION__, DNSMASQ_SERVERS_CONF));
+        return ANSC_STATUS_FAILURE;
+    }
 
-        /* Only a MAC add/change affects which clients get redirected - DNS/
-         * tag-only edits apply via dnsmasq's existing override. */
-        if (conf_rc == 0 && pDnsTableEntry->MacAddressChanged)
-        {
-            xdns_sync_firewall_client(pDnsTableEntry->MacAddress, TRUE);
-        }
-
-        xdns_fw_unlock(fwlock);
-
-        if (conf_rc != 0)
-        {
-            CcspTraceError(("%s: failed to update %s\n", __FUNCTION__, DNSMASQ_SERVERS_CONF));
-            return ANSC_STATUS_FAILURE;
-        }
+    /* Only a MAC add/change affects which clients get redirected - DNS/
+     * tag-only edits apply via dnsmasq's existing override. */
+    if (pDnsTableEntry->MacAddressChanged)
+    {
+        xdns_sync_firewall_client(pDnsTableEntry->MacAddress);
     }
 
     pDnsTableEntry->MacAddressChanged = FALSE;
