@@ -614,7 +614,17 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 		return FILE_OPEN_ERROR;
 	}
 
-	xdns_sync_ipset();
+	{
+		xdns_ipset_entry_t entries[XDNS_CACHE_SIZE];
+		int n;
+		for (n = 0; n < tmp_xdns_cache->Tablecount; n++)
+		{
+			entries[n].mac = tmp_xdns_cache->XDNSTableList[n].MacAddress;
+			entries[n].tag = tmp_xdns_cache->XDNSTableList[n].Tag;
+		}
+		xdns_sync_ipset(tmp_xdns_cache->DefaultDeviceDnsIPv4, tmp_xdns_cache->DefaultDeviceDnsIPv6,
+		                 tmp_xdns_cache->DefaultDeviceTag, entries, tmp_xdns_cache->Tablecount);
+	}
 	syscfg_get(NULL, "XDNS_GlobalRedirect", newFlag, sizeof(newFlag));
 
 	syscfg_get( NULL, "X_RDKCENTRAL-COM_XDNS", buf, sizeof(buf));

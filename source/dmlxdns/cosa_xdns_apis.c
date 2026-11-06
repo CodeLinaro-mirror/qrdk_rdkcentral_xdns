@@ -89,91 +89,59 @@ extern ANSC_HANDLE bus_handle;
 
 #define BUF_LEN (10 * (sizeof(struct inotify_event) + NAME_MAX + 1))
 
-/* Returns 1 if 'dns' is not the LAN dnsmasq server or one of resolv.conf's own
- * nameservers, i.e. it is a real XDNS override rather than normal operation. */
+/* Returns 1 if 'dns' is not the LAN dnsmasq server, i.e. it is a real XDNS
+ * override rather than normal operation. */
 static int xdns_default_is_override(const char *dns)
 {
-    char buf[256];
-    char ns[256];
     char lan_ip[64] = {0};
-    FILE *fp;
 
     if (dns == NULL || dns[0] == '\0')
         return 0;
 
-    /* If default DNS equals the LAN IP (dnsmasq), it's normal, not an override */
     if (syscfg_get(NULL, "lan_ipaddr", lan_ip, sizeof(lan_ip)) == 0 &&
         lan_ip[0] != '\0' && 0 == strcasecmp(dns, lan_ip))
     {
         return 0;
     }
 
-    /* Check resolv.conf for WAN nameservers */
-    fp = fopen(RESOLV_CONF, "r");
-    if (fp == NULL)
-        return 1;  /* Can't verify: assume override to be safe */
-
-    while (fgets(buf, sizeof(buf), fp) != NULL)
-    {
-        if (1 == sscanf(buf, "nameserver %255s", ns) && 0 == strcasecmp(ns, dns))
-        {
-            fclose(fp);
-            return 0;
-        }
-    }
-    fclose(fp);
     return 1;
 }
 
-/* Rebuilds the client ipset from the conf via a staging set and an atomic
- * swap, and writes the XDNS_GlobalRedirect syscfg flag in the same pass.
- * Global redirect is needed when the default entry is a real XDNS override
- * or has a non-default tag, or a masked MAC is present. Masked MACs and the
- * default entry stay out of the ipset. Returns 0 on success. */
-int xdns_sync_ipset(void)
+/* Rebuilds the client ipset from the caller's in-memory entries via a
+ * staging set and an atomic swap, and writes the XDNS_GlobalRedirect syscfg
+ * flag in the same pass. No re-read of DNSMASQ_SERVERS_CONF is needed since
+ * the caller already holds the data it just wrote. Global redirect is needed
+ * when the default entry is a real XDNS override or has a non-default tag,
+ * or a masked MAC is present. Masked MACs stay out of the ipset. Returns 0
+ * on success. */
+int xdns_sync_ipset(const char *defV4, const char *defV6, const char *defTag,
+                     const xdns_ipset_entry_t *entries, int count)
 {
     char stage[64];
-    char line[256];
-    FILE *fp = NULL;
     int rc;
+    int i;
     int global_redirect = 0;
 
-    fp = fopen(DNSMASQ_SERVERS_CONF, "r");
-    if (fp == NULL)
+    if ((defTag != NULL && 0 != strcmp(defTag, XDNS_DEFAULT_TAG)) ||
+        xdns_default_is_override(defV4) || xdns_default_is_override(defV6))
     {
-        CcspTraceError(("%s: cannot read %s\n", __FUNCTION__, DNSMASQ_SERVERS_CONF));
-        if (syscfg_set(NULL, "XDNS_GlobalRedirect", "1") != 0)
-            CcspTraceError(("%s: syscfg_set XDNS_GlobalRedirect failed\n", __FUNCTION__));
-        return -1;
+        global_redirect = 1;
     }
 
     snprintf(stage, sizeof(stage), "%s_new", XDNS_IPSET);
     v_secure_system("ipset -! destroy %s", stage);
     rc = v_secure_system("ipset -! create %s hash:mac", stage);
 
-    while (rc == 0 && fgets(line, sizeof(line), fp) != NULL)
+    for (i = 0; rc == 0 && i < count; i++)
     {
-        char *saveptr = NULL;
-        char *key = strtok_r(line, " \t\r\n", &saveptr);
-        char *mac = strtok_r(NULL, " \t\r\n", &saveptr);
-        char *v4 = strtok_r(NULL, " \t\r\n", &saveptr);
-        char *v6 = strtok_r(NULL, " \t\r\n", &saveptr);
-        char *tag = strtok_r(NULL, " \t\r\n", &saveptr);
+        const char *mac = entries[i].mac;
 
-        if (key == NULL || mac == NULL || 0 != strcmp(key, "dnsoverride"))
+        if (mac == NULL || mac[0] == '\0')
         {
             continue;
         }
 
-        if (0 == strcasecmp(mac, XDNS_DEFAULT_MAC))
-        {
-            if ((tag != NULL && 0 != strcmp(tag, XDNS_DEFAULT_TAG)) ||
-                xdns_default_is_override(v4) || xdns_default_is_override(v6))
-            {
-                global_redirect = 1;
-            }
-        }
-        else if (strchr(mac, '/') != NULL)
+        if (strchr(mac, '/') != NULL)
         {
             global_redirect = 1;  /* Masked MAC: an ipset can't match it */
         }
@@ -182,7 +150,6 @@ int xdns_sync_ipset(void)
             rc = v_secure_system("ipset -! add %s %s", stage, mac);
         }
     }
-    fclose(fp);
 
     if (rc == 0)
     {
@@ -205,6 +172,33 @@ int xdns_sync_ipset(void)
         CcspTraceError(("%s: failed to update ipset %s\n", __FUNCTION__, XDNS_IPSET));
     }
     return rc;
+}
+
+/* Builds the ipset entry list from the in-memory DM list (g_pCosaBEManager->hXdns)
+ * and the default device DNS fields, then syncs the ipset/syscfg flag. Used
+ * by all DM-driven call sites so none of them need to re-read the conf file. */
+int xdns_sync_ipset_dm(void)
+{
+    PCOSA_DATAMODEL_XDNS pMyObject = (PCOSA_DATAMODEL_XDNS)g_pCosaBEManager->hXdns;
+    PSINGLE_LINK_ENTRY pSListEntry;
+    xdns_ipset_entry_t entries[XDNS_CACHE_SIZE_MAX];
+    int count = 0;
+
+    pSListEntry = AnscSListGetFirstEntry(&pMyObject->XDNSDeviceList);
+    while (pSListEntry != NULL && count < XDNS_CACHE_SIZE_MAX)
+    {
+        PCOSA_CONTEXT_XDNS_LINK_OBJECT pCxtLink = ACCESS_COSA_CONTEXT_XDNS_LINK_OBJECT(pSListEntry);
+        PCOSA_DML_XDNS_MACDNS_MAPPING_ENTRY pEntry = (PCOSA_DML_XDNS_MACDNS_MAPPING_ENTRY)pCxtLink->hContext;
+
+        entries[count].mac = pEntry->MacAddress;
+        entries[count].tag = pEntry->Tag;
+        count++;
+
+        pSListEntry = AnscSListGetNextEntry(pSListEntry);
+    }
+
+    return xdns_sync_ipset(pMyObject->DefaultDeviceDnsIPv4, pMyObject->DefaultDeviceDnsIPv6,
+                            pMyObject->DefaultDeviceTag, entries, count);
 }
 
 #ifndef UNIT_TEST_DOCKER_SUPPORT
@@ -1650,7 +1644,7 @@ CosaXDNSInitialize
 #endif //WAN_FAILOVER_SUPPORTED
 #ifndef UNIT_TEST_DOCKER_SUPPORT
     // The set is lost on reboot and only xdns fills it.
-    xdns_sync_ipset();
+    xdns_sync_ipset_dm();
 #endif
     ret = rbusEvent_Subscribe(handle, "Device.X_RDK_WanManager.CurrentActiveDNS", eventReceiveHandler, NULL, 0);
     if(ret != RBUS_ERROR_SUCCESS)
