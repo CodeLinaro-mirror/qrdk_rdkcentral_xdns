@@ -173,7 +173,7 @@ typedef struct
 
 int xdns_sync_ipset(const char *defV4, const char *defV6, const char *defTag,
                      const xdns_ipset_entry_t *entries, int count);
-int xdns_sync_ipset_dm(void);
+int xdns_sync_ipset_dm(ANSC_HANDLE hXdns);
 void RefreshResolvConfEntry();
 int SetXdnsConfig();
 int UnsetXdnsConfig();

@@ -174,12 +174,15 @@ int xdns_sync_ipset(const char *defV4, const char *defV6, const char *defTag,
     return rc;
 }
 
-/* Builds the ipset entry list from the in-memory DM list (g_pCosaBEManager->hXdns)
- * and the default device DNS fields, then syncs the ipset/syscfg flag. Used
- * by all DM-driven call sites so none of them need to re-read the conf file. */
-int xdns_sync_ipset_dm(void)
+/* Builds the ipset entry list from the in-memory DM list and the default
+ * device DNS fields, then syncs the ipset/syscfg flag. Used by all DM-driven
+ * call sites so none of them need to re-read the conf file. Takes the XDNS
+ * object handle explicitly rather than reading g_pCosaBEManager->hXdns,
+ * since it also runs during CosaXDNSInitialize() which executes before that
+ * global is assigned. */
+int xdns_sync_ipset_dm(ANSC_HANDLE hXdns)
 {
-    PCOSA_DATAMODEL_XDNS pMyObject = (PCOSA_DATAMODEL_XDNS)g_pCosaBEManager->hXdns;
+    PCOSA_DATAMODEL_XDNS pMyObject = (PCOSA_DATAMODEL_XDNS)hXdns;
     PSINGLE_LINK_ENTRY pSListEntry;
     xdns_ipset_entry_t entries[XDNS_CACHE_SIZE_MAX];
     int count = 0;
@@ -1644,7 +1647,7 @@ CosaXDNSInitialize
 #endif //WAN_FAILOVER_SUPPORTED
 #ifndef UNIT_TEST_DOCKER_SUPPORT
     // The set is lost on reboot and only xdns fills it.
-    xdns_sync_ipset_dm();
+    xdns_sync_ipset_dm((ANSC_HANDLE)pMyObject);
 #endif
     ret = rbusEvent_Subscribe(handle, "Device.X_RDK_WanManager.CurrentActiveDNS", eventReceiveHandler, NULL, 0);
     if(ret != RBUS_ERROR_SUCCESS)
