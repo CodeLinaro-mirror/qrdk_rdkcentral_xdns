@@ -89,8 +89,13 @@ extern ANSC_HANDLE bus_handle;
 
 #define BUF_LEN (10 * (sizeof(struct inotify_event) + NAME_MAX + 1))
 
+static int sysevent_fd = 0;
+static token_t sysEtoken;
+
 /* Returns 1 if 'dns' is not the LAN dnsmasq server, i.e. it is a real XDNS
- * override rather than normal operation. */
+ * override rather than normal operation. Checks both the IPv4 LAN address
+ * (syscfg lan_ipaddr) and the IPv6 LAN address (sysevent lan_ipaddr_v6,
+ * same source firewall.c uses for its DNAT destination). */
 static int xdns_default_is_override(const char *dns)
 {
     char lan_ip[64] = {0};
@@ -99,6 +104,13 @@ static int xdns_default_is_override(const char *dns)
         return 0;
 
     if (syscfg_get(NULL, "lan_ipaddr", lan_ip, sizeof(lan_ip)) == 0 &&
+        lan_ip[0] != '\0' && 0 == strcasecmp(dns, lan_ip))
+    {
+        return 0;
+    }
+
+    lan_ip[0] = '\0';
+    if (sysevent_get(sysevent_fd, sysEtoken, "lan_ipaddr_v6", lan_ip, sizeof(lan_ip)) == 0 &&
         lan_ip[0] != '\0' && 0 == strcasecmp(dns, lan_ip))
     {
         return 0;
@@ -316,8 +328,6 @@ int get_xdnsSysEvent_type_from_name(char *name, enum xdnsSysEvent_e *type_ptr)
 }
 
 static BOOL XDNSSysEventHandlerStarted=FALSE;
-static int sysevent_fd = 0;
-static token_t sysEtoken;
 static async_id_t async_id[1];
 static char prevWanIfname[16] = {0};
 
