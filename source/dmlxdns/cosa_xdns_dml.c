@@ -1294,17 +1294,7 @@ XDNS_Commit
 
     // Refresh the ipset/syscfg flag, and restart the firewall only if the
     // global-vs-per-client redirect decision actually flipped.
-    {
-        char oldFlag[2] = {0};
-        char newFlag[2] = {0};
-        syscfg_get(NULL, "XDNS_GlobalRedirect", oldFlag, sizeof(oldFlag));
-        xdns_sync_ipset_dm();
-        syscfg_get(NULL, "XDNS_GlobalRedirect", newFlag, sizeof(newFlag));
-        if (0 != strcmp(oldFlag, newFlag))
-        {
-            commonSyseventSet("firewall-restart", "");
-        }
-    }
+    xdns_sync_firewall_client();
 
     pMyObject->DefaultDeviceDnsIPv4Changed = FALSE;
     pMyObject->DefaultDeviceDnsIPv6Changed = FALSE;
