@@ -84,6 +84,162 @@ extern ANSC_HANDLE bus_handle;
 
 #define BUF_LEN (10 * (sizeof(struct inotify_event) + NAME_MAX + 1))
 
+/* Returns 1 if 'dns' is not the LAN dnsmasq server, i.e. it is a real XDNS
+ * override rather than normal operation. Checks both the IPv4 LAN address
+ * (syscfg lan_ipaddr) and the IPv6 LAN address (sysevent lan_ipaddr_v6,
+ * same source firewall.c uses for its DNAT destination). Uses a private,
+ * short-lived sysevent connection rather than the shared sysevent_fd/
+ * sysEtoken, which belong to the async notification thread and are not
+ * safe to use concurrently from this (commit) thread. If 'dns' is an IPv6
+ * address and lan_ipaddr_v6 isn't available yet (e.g. this early at boot),
+ * falls back to the already-persisted XDNS_GlobalRedirect syscfg value
+ * instead of assuming override. */
+static int xdns_default_is_override(const char *dns)
+{
+    char lan_ip[64] = {0};
+    int fd;
+    token_t token;
+    int got_v6 = 0;
+
+    if (dns == NULL || dns[0] == '\0')
+        return 0;
+
+    if (syscfg_get(NULL, "lan_ipaddr", lan_ip, sizeof(lan_ip)) == 0 &&
+        lan_ip[0] != '\0' && 0 == strcasecmp(dns, lan_ip))
+    {
+        return 0;
+    }
+
+    if (strchr(dns, ':') == NULL)
+    {
+        return 1;  /* IPv4-shaped and didn't match lan_ipaddr above */
+    }
+
+    lan_ip[0] = '\0';
+    fd = sysevent_open("127.0.0.1", SE_SERVER_WELL_KNOWN_PORT, SE_VERSION, "xdns_override_check", &token);
+    if (fd >= 0)
+    {
+        got_v6 = (sysevent_get(fd, token, "lan_ipaddr_v6", lan_ip, sizeof(lan_ip)) == 0 && lan_ip[0] != '\0');
+        if (got_v6 && 0 == strcasecmp(dns, lan_ip))
+        {
+            sysevent_close(fd, token);
+            return 0;
+        }
+        sysevent_close(fd, token);
+    }
+
+    if (!got_v6)
+    {
+        /* lan_ipaddr_v6 not ready yet (e.g. boot); trust the last
+         * persisted decision instead of forcing a spurious global
+         * redirect. */
+        char last[8] = {0};
+        if (syscfg_get(NULL, "XDNS_GlobalRedirect", last, sizeof(last)) == 0 && strcmp(last, "0") == 0)
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+/* Rebuilds the client ipset from the caller's in-memory entries via a
+ * staging set and an atomic swap, and writes the XDNS_GlobalRedirect syscfg
+ * flag in the same pass. No re-read of DNSMASQ_SERVERS_CONF is needed since
+ * the caller already holds the data it just wrote. Global redirect is needed
+ * when the default entry is a real XDNS override or has a non-default tag,
+ * or a masked MAC is present. Masked MACs stay out of the ipset. Returns 0
+ * on success. */
+int xdns_sync_ipset(const char *defV4, const char *defV6, const char *defTag,
+                     const xdns_ipset_entry_t *entries, int count)
+{
+    char stage[64];
+    int rc;
+    int i;
+    int global_redirect = 0;
+
+    if ((defTag != NULL && 0 != strcmp(defTag, XDNS_DEFAULT_TAG)) ||
+        xdns_default_is_override(defV4) || xdns_default_is_override(defV6))
+    {
+        global_redirect = 1;
+    }
+
+    snprintf(stage, sizeof(stage), "%s_new", XDNS_IPSET);
+    v_secure_system("ipset -! destroy %s", stage);
+    rc = v_secure_system("ipset -! create %s hash:mac", stage);
+
+    for (i = 0; rc == 0 && i < count; i++)
+    {
+        const char *mac = entries[i].mac;
+
+        if (mac == NULL || mac[0] == '\0')
+        {
+            continue;
+        }
+
+        if (strchr(mac, '/') != NULL)
+        {
+            global_redirect = 1;  /* Masked MAC: an ipset can't match it */
+        }
+        else
+        {
+            rc = v_secure_system("ipset -! add %s %s", stage, mac);
+        }
+    }
+
+    if (rc == 0)
+    {
+        rc = v_secure_system("ipset -! create %s hash:mac", XDNS_IPSET);
+    }
+    if (rc == 0)
+    {
+        rc = v_secure_system("ipset -! swap %s %s", stage, XDNS_IPSET);
+    }
+    v_secure_system("ipset -! destroy %s", stage);
+
+    if (syscfg_set(NULL, "XDNS_GlobalRedirect", (rc != 0 || global_redirect) ? "1" : "0") != 0)
+    {
+        CcspTraceError(("%s: syscfg_set XDNS_GlobalRedirect failed\n", __FUNCTION__));
+        rc = -1;
+    }
+
+    if (rc != 0)
+    {
+        CcspTraceError(("%s: failed to update ipset %s\n", __FUNCTION__, XDNS_IPSET));
+    }
+    return rc;
+}
+
+/* Builds the ipset entry list from the in-memory DM list and the default
+ * device DNS fields, then syncs the ipset/syscfg flag. Used by all DM-driven
+ * call sites so none of them need to re-read the conf file. Takes the XDNS
+ * object handle explicitly rather than reading g_pCosaBEManager->hXdns,
+ * since it also runs during CosaXDNSInitialize() which executes before that
+ * global is assigned. */
+int xdns_sync_ipset_dm(ANSC_HANDLE hXdns)
+{
+    PCOSA_DATAMODEL_XDNS pMyObject = (PCOSA_DATAMODEL_XDNS)hXdns;
+    PSINGLE_LINK_ENTRY pSListEntry;
+    xdns_ipset_entry_t entries[XDNS_CACHE_SIZE_MAX];
+    int count = 0;
+
+    pSListEntry = AnscSListGetFirstEntry(&pMyObject->XDNSDeviceList);
+    while (pSListEntry != NULL && count < XDNS_CACHE_SIZE_MAX)
+    {
+        PCOSA_CONTEXT_XDNS_LINK_OBJECT pCxtLink = ACCESS_COSA_CONTEXT_XDNS_LINK_OBJECT(pSListEntry);
+        PCOSA_DML_XDNS_MACDNS_MAPPING_ENTRY pEntry = (PCOSA_DML_XDNS_MACDNS_MAPPING_ENTRY)pCxtLink->hContext;
+
+        entries[count].mac = pEntry->MacAddress;
+        entries[count].tag = pEntry->Tag;
+        count++;
+
+        pSListEntry = AnscSListGetNextEntry(pSListEntry);
+    }
+
+    return xdns_sync_ipset(pMyObject->DefaultDeviceDnsIPv4, pMyObject->DefaultDeviceDnsIPv6,
+                            pMyObject->DefaultDeviceTag, entries, count);
+}
+
 #ifndef UNIT_TEST_DOCKER_SUPPORT
     #define STATIC static
 #else
@@ -1516,6 +1672,10 @@ CosaXDNSInitialize
         return ANSC_STATUS_FAILURE;
     }
 #endif //WAN_FAILOVER_SUPPORTED
+#ifndef UNIT_TEST_DOCKER_SUPPORT
+    // The set is lost on reboot and only xdns fills it.
+    xdns_sync_ipset_dm((ANSC_HANDLE)pMyObject);
+#endif
     ret = rbusEvent_Subscribe(handle, "Device.X_RDK_WanManager.CurrentActiveDNS", eventReceiveHandler, NULL, 0);
     if(ret != RBUS_ERROR_SUCCESS)
     {

@@ -25,6 +25,11 @@
 #define DNSMASQ_SERVERS_CONF "/nvram/dnsmasq_servers.conf"
 #define DNSMASQ_SERVERS_BAK "/nvram/dnsmasq_servers.bak"
 
+/* The firewall creates the set and matches it; xdns owns its members */
+#define XDNS_IPSET "xdns_clients"
+#define XDNS_DEFAULT_TAG "empty"
+#define XDNS_CACHE_SIZE_MAX 256
+
 #define MAX_BUF_SIZE 256
 #define MAX_XDNS_SERV 2
 //mandate Dual stack by turning on this
@@ -156,6 +161,18 @@ void ReplaceDnsmasqConfEntry(char* macaddress, char (*overrideEntry)[MAX_BUF_SIZ
 void ResetDnsmasqConfFile();
 void AppendDnsmasqConfEntry(char (*string1)[MAX_BUF_SIZE], int count);
 void RemoveDnsmasqConfEntry(char* macaddress);
+
+/* Generic client entry used to rebuild the ipset directly from in-memory
+ * data, avoiding a re-read of DNSMASQ_SERVERS_CONF after it is written. */
+typedef struct
+{
+    const char *mac;
+    const char *tag;
+} xdns_ipset_entry_t;
+
+int xdns_sync_ipset(const char *defV4, const char *defV6, const char *defTag,
+                     const xdns_ipset_entry_t *entries, int count);
+int xdns_sync_ipset_dm(ANSC_HANDLE hXdns);
 void RefreshResolvConfEntry();
 int SetXdnsConfig();
 int UnsetXdnsConfig();

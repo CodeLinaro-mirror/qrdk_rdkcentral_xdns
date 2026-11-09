@@ -115,6 +115,23 @@ BOOL isValidMacAddress
     return TRUE;
 }
 
+/* Refreshes the ipset/syscfg flag for a changed client, and restarts the
+ * firewall only if the global-vs-per-client decision flipped (e.g. a masked
+ * MAC was added/removed). */
+static void xdns_sync_firewall_client(void)
+{
+    char oldFlag[2] = {0};
+    char newFlag[2] = {0};
+
+    syscfg_get(NULL, "XDNS_GlobalRedirect", oldFlag, sizeof(oldFlag));
+    xdns_sync_ipset_dm(g_pCosaBEManager->hXdns);
+    syscfg_get(NULL, "XDNS_GlobalRedirect", newFlag, sizeof(newFlag));
+    if (0 != strcmp(oldFlag, newFlag))
+    {
+        commonSyseventSet("firewall-restart", "");
+    }
+}
+
 /***********************************************************************
 
 
@@ -1275,6 +1292,10 @@ XDNS_Commit
         CreateDnsmasqServerConf(pMyObject);
     }
 
+    // Refresh the ipset/syscfg flag, and restart the firewall only if the
+    // global-vs-per-client redirect decision actually flipped.
+    xdns_sync_firewall_client();
+
     pMyObject->DefaultDeviceDnsIPv4Changed = FALSE;
     pMyObject->DefaultDeviceDnsIPv6Changed = FALSE;
     pMyObject->DefaultSecondaryDeviceDnsIPv4Changed = FALSE;
@@ -1569,6 +1590,10 @@ DNSMappingTable_DelEntry
 			AnscFreeMemory(pXdnsCxtLink->hContext);
 
 			AnscFreeMemory(pXdnsCxtLink);
+
+			// Sync after the in-memory list is updated so the removed
+			// MAC is excluded from the rebuilt ipset.
+			xdns_sync_firewall_client();
 		}
 		else
 		{
@@ -1939,6 +1964,13 @@ DNSMappingTable_Commit
     snprintf(dnsoverrideEntry[0], 256, "dnsoverride %s %s %s\n", pDnsTableEntry->MacAddress, pDnsTableEntry->DnsIPv4, pDnsTableEntry->Tag);
 #endif
     ReplaceDnsmasqConfEntry(pDnsTableEntry->MacAddress, dnsoverrideEntry,1);
+
+    /* Only a MAC add/change affects which clients get redirected - DNS/
+     * tag-only edits apply via dnsmasq's existing override. */
+    if (pDnsTableEntry->MacAddressChanged)
+    {
+        xdns_sync_firewall_client();
+    }
 
     pDnsTableEntry->MacAddressChanged = FALSE;
     pDnsTableEntry->DnsIPv4Changed = FALSE;
