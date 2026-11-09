@@ -2102,12 +2102,12 @@ TEST_F(CcspXdnsCosaDmlTestFixture, XDNS_Commit_Failure)
         .WillRepeatedly(Return(EOK));
 
     EXPECT_CALL(*g_securewrapperMock, v_secure_system(_, _))
-        .Times(4)
+        .Times(9)
         .WillRepeatedly(Return(0));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, _, _, _))
-        .Times(1)
-        .WillOnce(Return(0));
+        .Times(6)
+        .WillRepeatedly(Return(0));
 
     ULONG result = XDNS_Commit(hInsContext);
 
@@ -2151,12 +2151,12 @@ TEST_F(CcspXdnsCosaDmlTestFixture, XDNS_Commit_sprintf_s_fails)
         .WillRepeatedly(Return(-1));
 
     EXPECT_CALL(*g_securewrapperMock, v_secure_system(_, _))
-        .Times(4)
+        .Times(7)
         .WillRepeatedly(Return(-1));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, _, _, _))
-        .Times(1)
-        .WillOnce(Return(0));
+        .Times(6)
+        .WillRepeatedly(Return(0));
 
     ULONG result = XDNS_Commit(hInsContext);
 
@@ -2201,7 +2201,7 @@ TEST_F(CcspXdnsCosaDmlTestFixture, XDNS_Commit_CoreNet)
         .WillRepeatedly(Return(-1));
 
     EXPECT_CALL(*g_securewrapperMock, v_secure_system(_, _))
-        .Times(4)
+        .Times(7)
         .WillRepeatedly(Return(-1));
 
     EXPECT_CALL(*g_libnetMock, rule_add(_))
@@ -2209,8 +2209,8 @@ TEST_F(CcspXdnsCosaDmlTestFixture, XDNS_Commit_CoreNet)
         .WillRepeatedly(Return(CNL_STATUS_SUCCESS));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, _, _, _))
-        .Times(1)
-        .WillOnce(Return(0));
+        .Times(6)
+        .WillRepeatedly(Return(0));
 
     ULONG result = XDNS_Commit(hInsContext);
 
@@ -2254,7 +2254,7 @@ TEST_F(CcspXdnsCosaDmlTestFixture, XDNS_Commit_CoreNet_Failure)
         .WillRepeatedly(Return(-1));
 
     EXPECT_CALL(*g_securewrapperMock, v_secure_system(_, _))
-        .Times(4)
+        .Times(7)
         .WillRepeatedly(Return(-1));
 
     EXPECT_CALL(*g_libnetMock, rule_add(_))
@@ -2262,8 +2262,8 @@ TEST_F(CcspXdnsCosaDmlTestFixture, XDNS_Commit_CoreNet_Failure)
         .WillRepeatedly(Return(CNL_STATUS_FAILURE));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, _, _, _))
-        .Times(1)
-        .WillOnce(Return(0));
+        .Times(6)
+        .WillRepeatedly(Return(0));
 
     ULONG result = XDNS_Commit(hInsContext);
 

@@ -84,16 +84,12 @@ extern ANSC_HANDLE bus_handle;
 
 #define BUF_LEN (10 * (sizeof(struct inotify_event) + NAME_MAX + 1))
 
-/* Returns 1 if 'dns' is not the LAN dnsmasq server, i.e. it is a real XDNS
- * override rather than normal operation. Checks both the IPv4 LAN address
- * (syscfg lan_ipaddr) and the IPv6 LAN address (sysevent lan_ipaddr_v6,
- * same source firewall.c uses for its DNAT destination). Uses a private,
- * short-lived sysevent connection rather than the shared sysevent_fd/
- * sysEtoken, which belong to the async notification thread and are not
- * safe to use concurrently from this (commit) thread. If 'dns' is an IPv6
- * address and lan_ipaddr_v6 isn't available yet (e.g. this early at boot),
- * falls back to the already-persisted XDNS_GlobalRedirect syscfg value
- * instead of assuming override. */
+/* 1 if 'dns' is a real XDNS override (not the LAN dnsmasq server). Checks
+ * IPv4 via syscfg lan_ipaddr and IPv6 via sysevent lan_ipaddr_v6, using a
+ * private sysevent connection (the shared sysevent_fd/sysEtoken belong to
+ * the async notification thread and aren't safe to reuse here). If v6
+ * lookup is unavailable (e.g. early boot), falls back to the last
+ * persisted XDNS_GlobalRedirect value instead of assuming override. */
 static int xdns_default_is_override(const char *dns)
 {
     char lan_ip[64] = {0};
@@ -130,9 +126,6 @@ static int xdns_default_is_override(const char *dns)
 
     if (!got_v6)
     {
-        /* lan_ipaddr_v6 not ready yet (e.g. boot); trust the last
-         * persisted decision instead of forcing a spurious global
-         * redirect. */
         char last[8] = {0};
         if (syscfg_get(NULL, "XDNS_GlobalRedirect", last, sizeof(last)) == 0 && strcmp(last, "0") == 0)
         {
@@ -143,13 +136,11 @@ static int xdns_default_is_override(const char *dns)
     return 1;
 }
 
-/* Rebuilds the client ipset from the caller's in-memory entries via a
- * staging set and an atomic swap, and writes the XDNS_GlobalRedirect syscfg
- * flag in the same pass. No re-read of DNSMASQ_SERVERS_CONF is needed since
- * the caller already holds the data it just wrote. Global redirect is needed
- * when the default entry is a real XDNS override or has a non-default tag,
- * or a masked MAC is present. Masked MACs stay out of the ipset. Returns 0
- * on success. */
+/* Rebuilds the client ipset via a staging set and an atomic swap, and
+ * writes XDNS_GlobalRedirect in the same pass - no re-read of
+ * DNSMASQ_SERVERS_CONF needed. Global redirect applies when the default
+ * entry is an override, has a non-default tag, or a masked MAC is present
+ * (masked MACs are excluded from the ipset). Returns 0 on success. */
 int xdns_sync_ipset(const char *defV4, const char *defV6, const char *defTag,
                      const xdns_ipset_entry_t *entries, int count)
 {
@@ -210,12 +201,9 @@ int xdns_sync_ipset(const char *defV4, const char *defV6, const char *defTag,
     return rc;
 }
 
-/* Builds the ipset entry list from the in-memory DM list and the default
- * device DNS fields, then syncs the ipset/syscfg flag. Used by all DM-driven
- * call sites so none of them need to re-read the conf file. Takes the XDNS
- * object handle explicitly rather than reading g_pCosaBEManager->hXdns,
- * since it also runs during CosaXDNSInitialize() which executes before that
- * global is assigned. */
+/* Builds the ipset entry list from the in-memory DM list and syncs it.
+ * Takes the handle explicitly (not g_pCosaBEManager->hXdns) since it also
+ * runs during CosaXDNSInitialize(), before that global is assigned. */
 int xdns_sync_ipset_dm(ANSC_HANDLE hXdns)
 {
     PCOSA_DATAMODEL_XDNS pMyObject = (PCOSA_DATAMODEL_XDNS)hXdns;

@@ -115,9 +115,7 @@ BOOL isValidMacAddress
     return TRUE;
 }
 
-/* Refreshes the ipset/syscfg flag for a changed client, and restarts the
- * firewall only if the global-vs-per-client decision flipped (e.g. a masked
- * MAC was added/removed). */
+/* Restarts the firewall only if the global-vs-per-client decision flipped. */
 static void xdns_sync_firewall_client(void)
 {
     char oldFlag[2] = {0};
@@ -1292,8 +1290,6 @@ XDNS_Commit
         CreateDnsmasqServerConf(pMyObject);
     }
 
-    // Refresh the ipset/syscfg flag, and restart the firewall only if the
-    // global-vs-per-client redirect decision actually flipped.
     xdns_sync_firewall_client();
 
     pMyObject->DefaultDeviceDnsIPv4Changed = FALSE;
@@ -1591,8 +1587,6 @@ DNSMappingTable_DelEntry
 
 			AnscFreeMemory(pXdnsCxtLink);
 
-			// Sync after the in-memory list is updated so the removed
-			// MAC is excluded from the rebuilt ipset.
 			xdns_sync_firewall_client();
 		}
 		else
