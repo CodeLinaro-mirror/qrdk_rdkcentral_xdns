@@ -95,12 +95,16 @@ extern ANSC_HANDLE bus_handle;
  * same source firewall.c uses for its DNAT destination). Uses a private,
  * short-lived sysevent connection rather than the shared sysevent_fd/
  * sysEtoken, which belong to the async notification thread and are not
- * safe to use concurrently from this (commit) thread. */
+ * safe to use concurrently from this (commit) thread. If 'dns' is an IPv6
+ * address and lan_ipaddr_v6 isn't available yet (e.g. this early at boot),
+ * falls back to the already-persisted XDNS_GlobalRedirect syscfg value
+ * instead of assuming override. */
 static int xdns_default_is_override(const char *dns)
 {
     char lan_ip[64] = {0};
     int fd;
     token_t token;
+    int got_v6 = 0;
 
     if (dns == NULL || dns[0] == '\0')
         return 0;
@@ -111,14 +115,31 @@ static int xdns_default_is_override(const char *dns)
         return 0;
     }
 
+    if (strchr(dns, ':') == NULL)
+    {
+        return 1;  /* IPv4-shaped and didn't match lan_ipaddr above */
+    }
+
     lan_ip[0] = '\0';
     fd = sysevent_open("127.0.0.1", SE_SERVER_WELL_KNOWN_PORT, SE_VERSION, "xdns_override_check", &token);
     if (fd >= 0)
     {
-        int found = (sysevent_get(fd, token, "lan_ipaddr_v6", lan_ip, sizeof(lan_ip)) == 0 &&
-                     lan_ip[0] != '\0' && 0 == strcasecmp(dns, lan_ip));
+        got_v6 = (sysevent_get(fd, token, "lan_ipaddr_v6", lan_ip, sizeof(lan_ip)) == 0 && lan_ip[0] != '\0');
+        if (got_v6 && 0 == strcasecmp(dns, lan_ip))
+        {
+            sysevent_close(fd, token);
+            return 0;
+        }
         sysevent_close(fd, token);
-        if (found)
+    }
+
+    if (!got_v6)
+    {
+        /* lan_ipaddr_v6 not ready yet (e.g. boot); trust the last
+         * persisted decision instead of forcing a spurious global
+         * redirect. */
+        char last[8] = {0};
+        if (syscfg_get(NULL, "XDNS_GlobalRedirect", last, sizeof(last)) == 0 && strcmp(last, "0") == 0)
         {
             return 0;
         }
