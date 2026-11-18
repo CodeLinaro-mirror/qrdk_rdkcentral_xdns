@@ -115,11 +115,12 @@ BOOL isValidMacAddress
     return TRUE;
 }
 
-/* Restarts the firewall only if the global-vs-per-client decision flipped. */
+/* Restarts the firewall only if XDNS is enabled and the global-vs-per-client decision flipped. */
 static void xdns_sync_firewall_client(void)
 {
     char oldFlag[2] = {0};
     char newFlag[2] = {0};
+    char enable[2] = {0};
 
     if (g_pCosaBEManager == NULL || g_pCosaBEManager->hXdns == NULL)
     {
@@ -129,7 +130,8 @@ static void xdns_sync_firewall_client(void)
     syscfg_get(NULL, "XDNS_GlobalRedirect", oldFlag, sizeof(oldFlag));
     xdns_sync_ipset_dm(g_pCosaBEManager->hXdns);
     syscfg_get(NULL, "XDNS_GlobalRedirect", newFlag, sizeof(newFlag));
-    if (0 != strcmp(oldFlag, newFlag))
+    syscfg_get(NULL, "X_RDKCENTRAL-COM_XDNS", enable, sizeof(enable));
+    if (atoi(enable) && 0 != strcmp(oldFlag, newFlag))
     {
         commonSyseventSet("firewall-restart", "");
     }

@@ -2108,7 +2108,7 @@ TEST_F(CcspXdnsCosaDmlTestFixture, XDNS_Commit_Failure)
         .WillRepeatedly(Return(0));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, _, _, _))
-        .Times(6)
+        .Times(7)
         .WillRepeatedly(Return(0));
 
     ULONG result = XDNS_Commit(hInsContext);
@@ -2159,7 +2159,7 @@ TEST_F(CcspXdnsCosaDmlTestFixture, XDNS_Commit_sprintf_s_fails)
         .WillRepeatedly(Return(-1));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, _, _, _))
-        .Times(6)
+        .Times(7)
         .WillRepeatedly(Return(0));
 
     ULONG result = XDNS_Commit(hInsContext);
@@ -2215,7 +2215,7 @@ TEST_F(CcspXdnsCosaDmlTestFixture, XDNS_Commit_CoreNet)
         .WillRepeatedly(Return(CNL_STATUS_SUCCESS));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, _, _, _))
-        .Times(6)
+        .Times(7)
         .WillRepeatedly(Return(0));
 
     ULONG result = XDNS_Commit(hInsContext);
@@ -2270,7 +2270,7 @@ TEST_F(CcspXdnsCosaDmlTestFixture, XDNS_Commit_CoreNet_Failure)
         .WillRepeatedly(Return(CNL_STATUS_FAILURE));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, _, _, _))
-        .Times(6)
+        .Times(7)
         .WillRepeatedly(Return(0));
 
     ULONG result = XDNS_Commit(hInsContext);
@@ -3995,8 +3995,8 @@ TEST_F(CcspXdnsCosaDmlTestFixture, DNSMappingTable_Commit)
         .WillRepeatedly(Return(0));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, StrEq("X_RDKCENTRAL-COM_XDNS"), _, _))
-        .Times(1)
-        .WillOnce(DoAll(testing::SetArrayArgument<2>(buf, buf + 1), Return(0)));
+        .Times(2)
+        .WillRepeatedly(DoAll(testing::SetArrayArgument<2>(buf, buf + 1), Return(0)));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, StrEq("XDNS_GlobalRedirect"), _, _))
         .Times(2)
@@ -4063,8 +4063,8 @@ TEST_F(CcspXdnsCosaDmlTestFixture, DNSMappingTable_Commit_v_secure_system_true)
         .WillRepeatedly(Return(0));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, StrEq("X_RDKCENTRAL-COM_XDNS"), _, _))
-        .Times(1)
-        .WillOnce(DoAll(testing::SetArrayArgument<2>(buf, buf + 1), Return(0)));
+        .Times(2)
+        .WillRepeatedly(DoAll(testing::SetArrayArgument<2>(buf, buf + 1), Return(0)));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, StrEq("XDNS_GlobalRedirect"), _, _))
         .Times(2)
@@ -4131,8 +4131,8 @@ TEST_F(CcspXdnsCosaDmlTestFixture, DNSMappingTable_Commit_v_secure_system_true2)
         .WillRepeatedly(Return(0));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, StrEq("X_RDKCENTRAL-COM_XDNS"), _, _))
-        .Times(1)
-        .WillOnce(DoAll(testing::SetArrayArgument<2>(buf, buf + 1), Return(0)));
+        .Times(2)
+        .WillRepeatedly(DoAll(testing::SetArrayArgument<2>(buf, buf + 1), Return(0)));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, StrEq("XDNS_GlobalRedirect"), _, _))
         .Times(2)
@@ -4204,8 +4204,8 @@ TEST_F(CcspXdnsCosaDmlTestFixture, DNSMappingTable_Commit_CoreNet)
         .WillOnce(Return(CNL_STATUS_SUCCESS));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, StrEq("X_RDKCENTRAL-COM_XDNS"), _, _))
-        .Times(1)
-        .WillOnce(DoAll(testing::SetArrayArgument<2>(buf, buf + 1), Return(0)));
+        .Times(2)
+        .WillRepeatedly(DoAll(testing::SetArrayArgument<2>(buf, buf + 1), Return(0)));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, StrEq("XDNS_GlobalRedirect"), _, _))
         .Times(2)
@@ -4276,8 +4276,8 @@ TEST_F(CcspXdnsCosaDmlTestFixture, DNSMappingTable_Commit_CoreNet_Failure)
         .WillOnce(Return(CNL_STATUS_FAILURE));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, StrEq("X_RDKCENTRAL-COM_XDNS"), _, _))
-        .Times(1)
-        .WillOnce(DoAll(testing::SetArrayArgument<2>(buf, buf + 1), Return(0)));
+        .Times(2)
+        .WillRepeatedly(DoAll(testing::SetArrayArgument<2>(buf, buf + 1), Return(0)));
 
     EXPECT_CALL(*g_syscfgMock, syscfg_get(_, StrEq("XDNS_GlobalRedirect"), _, _))
         .Times(2)
