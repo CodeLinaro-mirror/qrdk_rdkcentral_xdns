@@ -27,7 +27,6 @@
 
 /* The firewall creates the set and matches it; xdns owns its members */
 #define XDNS_IPSET "xdns_clients"
-#define XDNS_CACHE_SIZE_MAX 256
 
 #define MAX_BUF_SIZE 256
 #define MAX_XDNS_SERV 2

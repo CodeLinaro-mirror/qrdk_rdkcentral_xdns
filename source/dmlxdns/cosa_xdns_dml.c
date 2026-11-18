@@ -121,6 +121,11 @@ static void xdns_sync_firewall_client(void)
     char oldFlag[2] = {0};
     char newFlag[2] = {0};
 
+    if (g_pCosaBEManager == NULL || g_pCosaBEManager->hXdns == NULL)
+    {
+        return;
+    }
+
     syscfg_get(NULL, "XDNS_GlobalRedirect", oldFlag, sizeof(oldFlag));
     xdns_sync_ipset_dm(g_pCosaBEManager->hXdns);
     syscfg_get(NULL, "XDNS_GlobalRedirect", newFlag, sizeof(newFlag));

@@ -71,6 +71,7 @@
 #include "plugin_main_apis.h"
 #include "cosa_xdns_apis.h"
 #include <sys/inotify.h>
+#include <arpa/inet.h>
 #include <limits.h>
 #include <rbus.h>
 #ifdef WAN_FAILOVER_SUPPORTED
@@ -83,6 +84,18 @@ extern ANSC_HANDLE bus_handle;
 //static pthread_mutex_t dnsmasqMutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define BUF_LEN (10 * (sizeof(struct inotify_event) + NAME_MAX + 1))
+
+/* Compares two IPs by value, so compressed/expanded/mixed-case IPv6 forms match. */
+static int xdns_ip_equal(const char *a, const char *b)
+{
+    struct in6_addr a6, b6;
+
+    if (inet_pton(AF_INET6, a, &a6) == 1 && inet_pton(AF_INET6, b, &b6) == 1)
+    {
+        return memcmp(&a6, &b6, sizeof(a6)) == 0;
+    }
+    return 0 == strcasecmp(a, b);
+}
 
 /* 1 if 'dns' is a real XDNS override (not the LAN dnsmasq server). Checks
  * IPv4 via syscfg lan_ipaddr and IPv6 via sysevent lan_ipaddr_v6, using a
@@ -101,7 +114,7 @@ static int xdns_default_is_override(const char *dns)
         return 0;
 
     if (syscfg_get(NULL, "lan_ipaddr", lan_ip, sizeof(lan_ip)) == 0 &&
-        lan_ip[0] != '\0' && 0 == strcasecmp(dns, lan_ip))
+        lan_ip[0] != '\0' && xdns_ip_equal(dns, lan_ip))
     {
         return 0;
     }
@@ -116,7 +129,7 @@ static int xdns_default_is_override(const char *dns)
     if (fd >= 0)
     {
         got_v6 = (sysevent_get(fd, token, "lan_ipaddr_v6", lan_ip, sizeof(lan_ip)) == 0 && lan_ip[0] != '\0');
-        if (got_v6 && 0 == strcasecmp(dns, lan_ip))
+        if (got_v6 && xdns_ip_equal(dns, lan_ip))
         {
             sysevent_close(fd, token);
             return 0;
@@ -178,10 +191,16 @@ int xdns_ipset_stage_commit(const char *stage, const xdns_default_dns_t *def, in
     }
     v_secure_system("ipset -! destroy %s", stage);
 
-    if (syscfg_set_commit(NULL, "XDNS_GlobalRedirect", (rc != 0 || global_redirect) ? "1" : "0") != 0)
+    const char *newFlag = (rc != 0 || global_redirect) ? "1" : "0";
+    char curFlag[8] = {0};
+
+    if (syscfg_get(NULL, "XDNS_GlobalRedirect", curFlag, sizeof(curFlag)) != 0 || strcmp(curFlag, newFlag) != 0)
     {
-        CcspTraceError(("%s: syscfg_set_commit XDNS_GlobalRedirect failed\n", __FUNCTION__));
-        rc = -1;
+        if (syscfg_set_commit(NULL, "XDNS_GlobalRedirect", newFlag) != 0)
+        {
+            CcspTraceError(("%s: syscfg_set_commit XDNS_GlobalRedirect failed\n", __FUNCTION__));
+            rc = -1;
+        }
     }
 
     if (rc != 0)
@@ -199,17 +218,15 @@ int xdns_sync_ipset_dm(ANSC_HANDLE hXdns)
     PCOSA_DATAMODEL_XDNS pMyObject = (PCOSA_DATAMODEL_XDNS)hXdns;
     PSINGLE_LINK_ENTRY pSListEntry;
     char stage[64];
-    int count = 0;
     int rc = xdns_ipset_stage_begin(stage, sizeof(stage));
 
     pSListEntry = AnscSListGetFirstEntry(&pMyObject->XDNSDeviceList);
-    while (rc == 0 && pSListEntry != NULL && count < XDNS_CACHE_SIZE_MAX)
+    while (rc == 0 && pSListEntry != NULL)
     {
         PCOSA_CONTEXT_XDNS_LINK_OBJECT pCxtLink = ACCESS_COSA_CONTEXT_XDNS_LINK_OBJECT(pSListEntry);
         PCOSA_DML_XDNS_MACDNS_MAPPING_ENTRY pEntry = (PCOSA_DML_XDNS_MACDNS_MAPPING_ENTRY)pCxtLink->hContext;
 
         rc = xdns_ipset_add_mac(stage, pEntry->MacAddress);
-        count++;
 
         pSListEntry = AnscSListGetNextEntry(pSListEntry);
     }

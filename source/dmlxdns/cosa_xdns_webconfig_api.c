@@ -611,7 +611,10 @@ int apply_XDNS_cache_ToDB(xdns_cache *tmp_xdns_cache)
 
 	fclose(fp1);
 	xdns_default_dns_t def = { tmp_xdns_cache->DefaultDeviceDnsIPv4, tmp_xdns_cache->DefaultDeviceDnsIPv6 };
-	xdns_ipset_stage_commit(stage, &def, sync_rc);
+	if (0 != xdns_ipset_stage_commit(stage, &def, sync_rc))
+	{
+		CcspTraceError(("%s: xdns_ipset_stage_commit failed\n", __FUNCTION__));
+	}
 	syscfg_get(NULL, "XDNS_GlobalRedirect", newFlag, sizeof(newFlag));
 
 	syscfg_get( NULL, "X_RDKCENTRAL-COM_XDNS", buf, sizeof(buf));
