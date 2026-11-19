@@ -115,6 +115,28 @@ BOOL isValidMacAddress
     return TRUE;
 }
 
+/* Restarts the firewall only if XDNS is enabled and the global-vs-per-client decision flipped. */
+static void xdns_sync_firewall_client(void)
+{
+    char oldFlag[2] = {0};
+    char newFlag[2] = {0};
+    char enable[2] = {0};
+
+    if (g_pCosaBEManager == NULL || g_pCosaBEManager->hXdns == NULL)
+    {
+        return;
+    }
+
+    syscfg_get(NULL, "XDNS_GlobalRedirect", oldFlag, sizeof(oldFlag));
+    xdns_sync_ipset_dm(g_pCosaBEManager->hXdns);
+    syscfg_get(NULL, "XDNS_GlobalRedirect", newFlag, sizeof(newFlag));
+    syscfg_get(NULL, "X_RDKCENTRAL-COM_XDNS", enable, sizeof(enable));
+    if (atoi(enable) && 0 != strcmp(oldFlag, newFlag))
+    {
+        commonSyseventSet("firewall-restart", "");
+    }
+}
+
 /***********************************************************************
 
 
@@ -1275,6 +1297,8 @@ XDNS_Commit
         CreateDnsmasqServerConf(pMyObject);
     }
 
+    xdns_sync_firewall_client();
+
     pMyObject->DefaultDeviceDnsIPv4Changed = FALSE;
     pMyObject->DefaultDeviceDnsIPv6Changed = FALSE;
     pMyObject->DefaultSecondaryDeviceDnsIPv4Changed = FALSE;
@@ -1569,6 +1593,8 @@ DNSMappingTable_DelEntry
 			AnscFreeMemory(pXdnsCxtLink->hContext);
 
 			AnscFreeMemory(pXdnsCxtLink);
+
+			xdns_sync_firewall_client();
 		}
 		else
 		{
@@ -1939,6 +1965,13 @@ DNSMappingTable_Commit
     snprintf(dnsoverrideEntry[0], 256, "dnsoverride %s %s %s\n", pDnsTableEntry->MacAddress, pDnsTableEntry->DnsIPv4, pDnsTableEntry->Tag);
 #endif
     ReplaceDnsmasqConfEntry(pDnsTableEntry->MacAddress, dnsoverrideEntry,1);
+
+    /* Only a MAC add/change affects which clients get redirected - DNS/
+     * tag-only edits apply via dnsmasq's existing override. */
+    if (pDnsTableEntry->MacAddressChanged)
+    {
+        xdns_sync_firewall_client();
+    }
 
     pDnsTableEntry->MacAddressChanged = FALSE;
     pDnsTableEntry->DnsIPv4Changed = FALSE;
